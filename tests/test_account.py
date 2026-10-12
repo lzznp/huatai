@@ -98,6 +98,11 @@ def main() -> int:
     eq([o["order_id"] for o in lst], [oid], "4.2 内核的订单列表能看见这张单")
     eq(lst[0]["src_name"], "touxiang.png", "4.3 订单里记着原文件名")
 
+    # 4.5 空的「默认工程」要藏起来（用户 2026-10-12 提的：它只是噪音）
+    ids = [p["id"] for p in D.handle("projects.list", {})[1]["projects"]]
+    eq("默认工程" in ids, False, "4.5 ★ 空的默认工程不显示（内核照旧建它，我们只隐藏）")
+    eq("玻璃画测试" in ids, True, "4.6 真有单的工程照常显示")
+
     # 2 不是图片
     code, body = D.handle("orders.create", {"project": "玻璃画测试", "src": str(fake)})
     eq(code, 400, "2.1 非图片 → 400")
@@ -157,6 +162,12 @@ def main() -> int:
     eq(D.handle("orders.create", {"project": "玻璃画测试"})[0], 400, "11.1 缺 src → 400")
     eq(D.handle("transcript.append", {"project": "玻璃画测试"})[0], 400, "11.2 缺 order → 400")
     eq(D.handle("order.detail", {"project": "玻璃画测试"})[0], 400, "11.3 缺 id → 400")
+
+    # 12 ★ 只藏"空的"默认工程：一旦它有单，必须照常显示（不许藏数据）
+    code, body = D.handle("orders.create", {"project": "默认工程", "src": str(img1)})
+    eq(code, 201, "12.1 也能往默认工程投料")
+    ids2 = [p["id"] for p in D.handle("projects.list", {})[1]["projects"]]
+    eq("默认工程" in ids2, True, "12.2 ★ 默认工程有单了就显示出来（只藏空的）")
 
     print()
     if FAIL:

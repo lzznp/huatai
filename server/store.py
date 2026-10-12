@@ -129,10 +129,17 @@ def create_project(display_name: str) -> dict:
 
 # ---------------------------------------------------------------- 读
 def list_projects() -> list[dict]:
-    """工程列表：内核给的订单统计 + 我们补的显示名。"""
+    """工程列表：内核给的订单统计 + 我们补的显示名。
+
+    ★ 藏掉**空的「默认工程」**：内核每次调用都会自动建它（`ensure_structure()` 里无条件 mkdir，
+    删了还会再建），而它 0 单时对用户只是噪音（用户 2026-10-12 提）。
+    **但它一旦有单就必须照常显示** —— 我们只藏空的，绝不藏数据。
+    """
     _bind()
     out: list[dict] = []
     for p in _orders.list_projects():
+        if p["id"] == _orders.PROJECT_DEFAULT and not p["order_count"]:
+            continue
         meta = _read_meta(p["id"])
         out.append({
             "id": p["id"],
