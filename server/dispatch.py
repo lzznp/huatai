@@ -31,7 +31,11 @@ ACTIONS: dict[str, str] = {
     "projects.list": "工程列表",
     "projects.create": "新建工程（payload.name）",
     "orders.list": "订单列表（payload.project 可省）",
-    "order.get": "单条订单（payload.project + payload.id）",
+    "orders.create": "投料建单（payload.project + payload.src）",
+    "order.get": "单条订单的整单归档（payload.project + payload.id）",
+    "order.detail": "一单全貌：归档 + 流水 + 产物（payload.project + payload.id）",
+    "transcript.append": "往对话流水追加一行（payload.project + payload.order + payload.entry）",
+    "transcript.read": "读回对话流水（payload.project + payload.order）",
     "shutdown": "让常驻进程收工（仅 stdio）",
 }
 
@@ -82,6 +86,18 @@ def handle(action: str, payload: dict | None = None) -> tuple[int, dict]:
                 return 404, {"error": "没找到这个订单", "detail": f"工程={pid} 订单={oid}"}
             return 200, data
 
+        if action == "order.detail":
+            pid, oid = payload.get("project"), payload.get("id")
+            if not pid or not oid:
+                return 400, {"error": "缺参数", "detail": "需要 project 与 id"}
+            return 200, ST.order_detail(str(pid), str(oid))
+
+        if action == "transcript.read":
+            pid, oid = payload.get("project"), payload.get("order")
+            if not pid or not oid:
+                return 400, {"error": "缺参数", "detail": "需要 project 与 order"}
+            return 200, ST.read_transcript(str(pid), str(oid))
+
         # ---------------- 写
         if action == "projects.create":
             name = payload.get("name")
@@ -94,6 +110,22 @@ def handle(action: str, payload: dict | None = None) -> tuple[int, dict]:
                 "目录": str(ST.project_path(meta["工程目录名"])),
             }
 
+        if action == "orders.create":
+            pid, src = payload.get("project"), payload.get("src")
+            if not pid or not src:
+                return 400, {"error": "缺参数", "detail": "需要 project（工程）与 src（原图路径）"}
+            return 201, ST.create_order(str(pid), str(src))
+
+        if action == "transcript.append":
+            pid = payload.get("project")
+            oid = payload.get("order")
+            entry = payload.get("entry")
+            if not pid or not oid:
+                return 400, {"error": "缺参数", "detail": "需要 project 与 order"}
+            if not isinstance(entry, dict):
+                return 400, {"error": "缺字段", "detail": "需要 entry（JSON 对象）"}
+            return 201, {"appended": True, "line": ST.append_transcript(str(pid), str(oid), entry)}
+
         if action == "shutdown":
             return 200, {"bye": True}
 
@@ -101,6 +133,8 @@ def handle(action: str, payload: dict | None = None) -> tuple[int, dict]:
 
     except FileExistsError as e:
         return 409, {"error": "同名工程已存在", "detail": str(e)}
+    except FileNotFoundError as e:
+        return 404, {"error": "找不到", "detail": str(e)}
     except _BAD as e:
         return 400, {"error": "参数不合法", "detail": str(e)}
     except Exception as e:  # noqa: BLE001 —— 绝不静默

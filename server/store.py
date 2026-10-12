@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -152,3 +153,163 @@ def list_orders(project: str | None = None) -> list[dict]:
 def get_order(project: str, order_id: str) -> dict | None:
     _bind()
     return _orders.load_order(order_id, project)
+
+
+# ================================================================ 订单（单 = 一张图 + 一段对话）
+#
+# 账的形状（一单一个目录，**只进不改 + 只追加**）：
+#     projects\<工程>\<订单>\
+#         session.json     整单归档（版本链 / 指标 / 局部调整）—— 内核 orders.py 的格式
+#         src_<原名>       原图副本（★ 只进不改：进来之后任何代码都不许改写它）
+#         out\             每版产物：<stem>.png（预览）+ <stem>.bmp（1bit 上机档）
+#         transcript.jsonl 与小助手的对话流水（一行一回合，**只追加**，不重写）
+#
+# 为什么单 = 一张图：跟内核一致（bestpic 决策 #7「每张图/每单活 = 一个 session_id」）。
+# 一个工程可以有很多单（很多张图）。
+
+TRANSCRIPT_NAME = "transcript.jsonl"
+
+# 流水里每行都必须带 kind —— 参考包判据「流水三分」：人说的话 / 壳塞进去的材料 /
+# 机器出的结论，**三者不许混**（界面要分开显示，否则聊天里掺满内部日志）。
+KINDS = ("user", "assistant", "material", "action", "system")
+
+
+def order_path(project: str, order_id: str) -> Path:
+    return projects_root() / project / order_id
+
+
+def transcript_path(project: str, order_id: str) -> Path:
+    return order_path(project, order_id) / TRANSCRIPT_NAME
+
+
+def _new_order_id(project: str) -> str:
+    base = "order-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+    oid, n = base, 1
+    while order_path(project, oid).exists():
+        n += 1
+        oid = f"{base}-{n}"
+    return oid
+
+
+def create_order(project: str, src: str, *, origin: str = "用户投料") -> dict:
+    """投料：把一张图收进某个工程，建一张单。
+
+    规矩：
+    - 工程必须已存在（不偷偷新建）
+    - 只吃图片（其余料明说读不了 —— 凭据在 capabilities）
+    - 源文件必须真的存在，且**复制**进来（原件不动）
+    - 复制进来的副本此后**只进不改**
+    """
+    from server import capabilities as CAP  # 局部导入，避免循环
+
+    _bind()
+    pdir = project_path(project)
+    if not pdir.is_dir():
+        raise FileNotFoundError(f"没有这个工程：{project}（先建工程再投料）")
+
+    src_p = Path(src)
+    if not src_p.is_file():
+        raise FileNotFoundError(f"找不到这个文件：{src}")
+
+    ok, why = CAP.can_read_material(src_p.name)
+    if not ok:
+        raise ValueError(why)
+
+    oid = _new_order_id(project)
+    d = order_path(project, oid)
+    (d / "out").mkdir(parents=True)
+
+    # 原图副本：只进不改
+    dst = d / f"src_{src_p.name}"
+    shutil.copy2(src_p, dst)
+
+    _orders.save_order(
+        oid,
+        history=[],
+        src_path=str(dst),
+        src_name=src_p.name,
+        project=project,
+    )
+    # 空流水先落一个文件，让"账的形状"一眼可见（内容是追加出来的）
+    transcript_path(project, oid).touch()
+
+    append_transcript(project, oid, {
+        "kind": "material",
+        "text": f"投料：{src_p.name}",
+        "data": {"原件": str(src_p), "副本": str(dst), "来源": origin},
+    })
+
+    return {
+        "order_id": oid,
+        "project": project,
+        "目录": str(d),
+        "src": str(dst),
+        "原件": str(src_p),
+    }
+
+
+def append_transcript(project: str, order_id: str, entry: dict) -> dict:
+    """往对话流水里追加**一行**（只追加，绝不重写整份）。
+
+    每行必须带 kind（见 KINDS）——不许把"人说的话"和"机器给的结论"混成一行。
+    """
+    p = order_path(project, order_id)
+    if not p.is_dir():
+        raise FileNotFoundError(f"没有这张单：{project}\\{order_id}")
+
+    if not isinstance(entry, dict):
+        raise ValueError("流水条目必须是 JSON 对象")
+    kind = entry.get("kind")
+    if kind not in KINDS:
+        raise ValueError(f"kind 必须是 {KINDS} 之一，收到 {kind!r}")
+
+    line = {
+        "at": entry.get("at") or datetime.now().isoformat(timespec="seconds"),
+        "kind": kind,
+        "text": str(entry.get("text") or ""),
+    }
+    if isinstance(entry.get("data"), dict):
+        line["data"] = entry["data"]
+
+    f = transcript_path(project, order_id)
+    with f.open("a", encoding="utf-8") as fh:      # ★ 追加，不是重写
+        fh.write(json.dumps(line, ensure_ascii=False) + "\n")
+        fh.flush()
+    return line
+
+
+def read_transcript(project: str, order_id: str) -> dict:
+    """读回对话流水。坏行**不丢**，单独报出来（不许静默吞掉）。"""
+    f = transcript_path(project, order_id)
+    if not f.is_file():
+        return {"entries": [], "坏行": 0}
+    entries, bad = [], 0
+    for raw in f.read_text(encoding="utf-8").splitlines():
+        raw = raw.strip().lstrip("\ufeff")
+        if not raw:
+            continue
+        try:
+            entries.append(json.loads(raw))
+        except json.JSONDecodeError:
+            bad += 1
+    return {"entries": entries, "坏行": bad}
+
+
+def order_detail(project: str, order_id: str) -> dict:
+    """一单的全貌：归档 + 流水 + 产物清单（界面用）。"""
+    data = get_order(project, order_id)
+    if data is None:
+        raise FileNotFoundError(f"没找到这张单：{project}\\{order_id}")
+    d = order_path(project, order_id)
+    out = d / "out"
+    files = []
+    if out.is_dir():
+        files = sorted(p.name for p in out.iterdir() if p.is_file())
+    tr = read_transcript(project, order_id)
+    return {
+        "订单": data,
+        "目录": str(d),
+        "产物": files,
+        "流水": tr["entries"],
+        "流水坏行": tr["坏行"],
+    }
