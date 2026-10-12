@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>画台</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- 左栏：工程 -->
+    <aside class="side">
+      <div class="side-head">工程</div>
+      <div class="new">
+        <input id="newName" placeholder="新建工程，取个名字" maxlength="60" />
+        <button id="btnNew">新建</button>
+      </div>
+      <ul id="projects" class="plist"></ul>
+      <div class="side-foot"><span id="kernelBadge" class="badge">内核：检查中…</span></div>
+    </aside>
+
+    <!-- 主区 -->
+    <main class="main">
+      <div class="main-head">
+        <span id="crumb">未选择工程</span>
+        <span id="meta" class="note"></span>
+      </div>
+
+      <div id="errBar" class="err hidden"></div>
+
+      <!-- 工程视图：投料 + 单列表 -->
+      <section id="projView" class="pane">
+        <div class="row">
+          <button id="btnFeed">＋ 投料（选一张图）</button>
+          <span class="note">只吃图片。选完小助手会先<b>猜</b>你要做什么，再问你一句。</span>
+        </div>
+        <ul id="orders" class="olist"></ul>
+      </section>
+
+      <!-- 单视图：对话 -->
+      <section id="orderView" class="pane hidden">
+        <div class="row obar">
+          <button id="btnBack" class="ghost">← 回工程</button>
+          <span id="ocrumb" class="note"></span>
+        </div>
+        <div id="chat" class="chat"></div>
+      </section>
+
+      <!-- ★ 输入框常驻底部（多行、大一点）；没打开单时禁用并写明原因 -->
+      <div class="composer-wrap">
+        <div id="thinking" class="thinking hidden">
+          小助手在看你的图和你说的话…（首次要拉起运行时，可能要十几秒）
+        </div>
+        <div class="composer">
+          <textarea id="say" rows="4" maxlength="2000"
+                    placeholder="正在准备…"></textarea>
+          <div class="send-col">
+            <button id="btnSay">发送</button>
+            <div class="hint">Enter 发送<br />Shift+Enter 换行</div>
+          </div>
+        </div>
+        <div id="sayHint" class="hint line">…</div>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

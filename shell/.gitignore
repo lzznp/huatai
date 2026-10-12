@@ -1,3 +1,6 @@
-build/bin
+# ⚠️ wails 模板默认把 frontend/dist 当"构建产物"忽略掉，
+# 但本方案**不用 npm/vite**，frontend/dist 就是**手写的前端源码** ⇒ 必须进版本库。
+# （2026-10-12 修：此前界面一直不在 git 里，回滚点盖不住它。）
 node_modules
-frontend/dist
+build/bin
+*.syso
