@@ -79,6 +79,7 @@ func scResult(r Reply, msg string) map[string]any {
 
 func selfcheck(app *App, withBrain bool) int {
 	k := app.k
+	var madeOrder string
 
 	fmt.Println("=== 画台 · 无头自检 ===")
 	root := k.Root
@@ -159,6 +160,23 @@ func selfcheck(app *App, withBrain bool) int {
 		}
 	}
 
+	// 5.4+ 造一张图、投料建单（**免费**），并验"最近一单"能被找回来
+	srcPng := filepath.Join(tmp, "自检料.png")
+	if err := scMakePng(srcPng); err != nil {
+		scFailf("5.4 造一张自检用的图", err.Error())
+	} else {
+		scOK("5.4 造了一张自检用的图（32×32 渐变）")
+		if m := scResult(app.NewOrder("自检工程", srcPng), "5.5 投料建单"); m != nil {
+			madeOrder = fmt.Sprintf("%v", m["order_id"])
+			scOK("5.6 单号 = " + madeOrder)
+			if m2 := scResult(app.SessionLatest(), "5.7 ★ 找得到最近一单（界面重开就靠它回到上次）"); m2 != nil {
+				latest, _ := m2["latest"].(map[string]any)
+				scEq(fmt.Sprintf("%v", latest["order_id"]), madeOrder, "5.8 ★ 最近一单＝刚建的那一单")
+				scEq(fmt.Sprintf("%v", latest["project"]), "自检工程", "5.9 归属的工程也对")
+			}
+		}
+	}
+
 	// 6 同名拒绝（不静默加后缀）
 	r6 := app.NewProject(name)
 	scEq(r6.OK, false, "6.1 同名工程被拒")
@@ -195,28 +213,20 @@ func selfcheck(app *App, withBrain bool) int {
 				m["finish_reason"], m["truncated"], m["elapsed_ms"], u["totalTokens"]))
 		}
 
-		// 11 投料 + 猜意图一轮（★ 界面走的就是这条路：选图 → 建单 → 问小助手）
-		srcPng := filepath.Join(tmp, "自检料.png")
-		if err := scMakePng(srcPng); err != nil {
-			scFailf("11.1 造一张自检用的图", err.Error())
-		} else {
-			scOK("11.1 造了一张自检用的图（32×32 渐变）")
-			if m := scResult(app.NewOrder("自检工程", srcPng), "11.2 投料建单"); m != nil {
-				oid := fmt.Sprintf("%v", m["order_id"])
-				if m2 := scResult(app.IntentRound("自检工程", oid, ""), "11.3 猜意图一轮（真调用模型）"); m2 != nil {
-					rep, _ := m2["reply"].(map[string]any)
-					scEq(fmt.Sprintf("%v", rep["ok"]), "true", "11.4 小助手回了话，且是合法 JSON")
-					scEq(fmt.Sprintf("%v", m2["合法"]), "true", "11.5 它的回答过了校验器")
-					parsed, _ := rep["parsed"].(map[string]any)
-					scEq(fmt.Sprintf("%v", parsed["action"]), "ask", "11.6 ★ 没被告知意图时它主动问")
-					scEq(strings.TrimSpace(fmt.Sprintf("%v", parsed["question"])) != "", true, "11.7 ★ 确实问了话")
-					scOK(fmt.Sprintf("11.8 它问的是：%v", parsed["question"]))
-					// 账要落得住
-					if det := scResult(app.OrderDetail("自检工程", oid), "11.9 读这一单的账"); det != nil {
-						ents, _ := det["流水"].([]any)
-						scEq(len(ents) >= 2, true, "11.10 ★ 流水里至少有「料」和「小助手的话」")
-					}
-				}
+		// 11 猜意图一轮（★ 界面走的就是这条路：选图 → 建单 → 问小助手）
+		if madeOrder == "" {
+			scFailf("11.0 需要一个单才能问小助手", "上面的投料没成功")
+		} else if m2 := scResult(app.IntentRound("自检工程", madeOrder, ""), "11.1 猜意图一轮（真调用模型）"); m2 != nil {
+			rep, _ := m2["reply"].(map[string]any)
+			scEq(fmt.Sprintf("%v", rep["ok"]), "true", "11.2 小助手回了话，且是合法 JSON")
+			scEq(fmt.Sprintf("%v", m2["合法"]), "true", "11.3 它的回答过了校验器")
+			parsed, _ := rep["parsed"].(map[string]any)
+			scEq(fmt.Sprintf("%v", parsed["action"]), "ask", "11.4 ★ 没被告知意图时它主动问")
+			scEq(strings.TrimSpace(fmt.Sprintf("%v", parsed["question"])) != "", true, "11.5 ★ 确实问了话")
+			scOK(fmt.Sprintf("11.6 它问的是：%v", parsed["question"]))
+			if det := scResult(app.OrderDetail("自检工程", madeOrder), "11.7 读这一单的账"); det != nil {
+				ents, _ := det["流水"].([]any)
+				scEq(len(ents) >= 2, true, "11.8 ★ 流水里至少有「料」和「小助手的话」")
 			}
 		}
 	} else {

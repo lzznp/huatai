@@ -40,6 +40,7 @@ ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/api/projects"): "projects.list",
     ("POST", "/api/projects"): "projects.create",
     ("GET", "/api/orders"): "orders.list",
+    ("GET", "/api/latest"): "session.latest",
     ("GET", "/api/order"): "order.get",
 }
 

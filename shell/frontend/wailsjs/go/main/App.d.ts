@@ -27,3 +27,5 @@ export function Orders(arg1:string):Promise<main.Reply>;
 export function PickImage():Promise<string>;
 
 export function Projects():Promise<main.Reply>;
+
+export function SessionLatest():Promise<main.Reply>;

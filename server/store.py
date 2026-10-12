@@ -150,6 +150,27 @@ def list_orders(project: str | None = None) -> list[dict]:
     return _orders.list_orders(project)
 
 
+def latest_order() -> dict | None:
+    """**最近动过的那一单**（跨工程），没有就返回 None。
+
+    为什么放在后端而不是前端：界面"重开就回到上次"这条行为，
+    如果写在前端就是一段没人验得着的猜测；放在这里，**无头自检能直接验**。
+    （注意：工程列表恒把「默认工程」排第一，所以前端不能靠"取第一个工程"来猜最近用过哪个。）
+    """
+    _bind()
+    lst = _orders.list_orders(None)          # 跨工程、按 updated_at 倒序
+    if not lst:
+        return None
+    o = lst[0]
+    return {
+        "project": o.get("project"),
+        "order_id": o.get("order_id"),
+        "src_name": o.get("src_name"),
+        "updated_at": o.get("updated_at"),
+        "n_ver": o.get("n_ver") or 0,
+    }
+
+
 def get_order(project: str, order_id: str) -> dict | None:
     _bind()
     return _orders.load_order(order_id, project)

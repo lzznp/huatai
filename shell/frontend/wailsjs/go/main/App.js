@@ -53,3 +53,7 @@ export function PickImage() {
 export function Projects() {
   return window['go']['main']['App']['Projects']();
 }
+
+export function SessionLatest() {
+  return window['go']['main']['App']['SessionLatest']();
+}

@@ -58,6 +58,12 @@ func (a *App) Orders(project string) Reply {
 	return a.k.Call("orders.list", map[string]any{"project": project}, 0)
 }
 
+// SessionLatest ★ 最近动过的那一单（跨工程）——界面一打开就靠它回到上次，
+// 这样"切工程/重开窗口 看不到对话"这类事不会再有。
+func (a *App) SessionLatest() Reply {
+	return a.k.Call("session.latest", nil, 20*time.Second)
+}
+
 // ---------------------------------------------------------------- 大脑（第 4a 步：只读往返）
 
 // BrainStatus 大脑配置与运行时状态（不花钱、不联网）。

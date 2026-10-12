@@ -45,6 +45,7 @@ ACTIONS: dict[str, str] = {
     "projects.list": "工程列表",
     "projects.create": "新建工程（payload.name）",
     "orders.list": "订单列表（payload.project 可省）",
+    "session.latest": "★ 最近动过的那一单（跨工程）——界面重开就靠它回到上次",
     "orders.create": "投料建单（payload.project + payload.src）",
     "order.get": "单条订单的整单归档（payload.project + payload.id）",
     "order.detail": "一单全貌：归档 + 流水 + 产物（payload.project + payload.id）",
@@ -94,6 +95,9 @@ def handle(action: str, payload: dict | None = None) -> tuple[int, dict]:
             if project is not None and not isinstance(project, str):
                 return 400, {"error": "project 必须是字符串", "detail": repr(project)}
             return 200, {"orders": ST.list_orders(project)}
+
+        if action == "session.latest":
+            return 200, {"latest": ST.latest_order()}
 
         if action == "order.get":
             pid, oid = payload.get("project"), payload.get("id")
