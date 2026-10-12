@@ -30,6 +30,12 @@ except Exception as e:             # noqa: BLE001 —— 大脑没接上不能�
     BRAIN = None
     BRAIN_ERR = f"{type(e).__name__}: {e}"
 
+try:
+    from . import intent as INTENT_MOD
+except Exception as e:             # noqa: BLE001
+    INTENT_MOD = None
+    BRAIN_ERR = BRAIN_ERR or f"{type(e).__name__}: {e}"
+
 SERVICE = "画台·服务"
 VERSION = "0.3.0"
 
@@ -46,6 +52,8 @@ ACTIONS: dict[str, str] = {
     "transcript.read": "读回对话流水（payload.project + payload.order）",
     "brain.status": "大脑状态（模型 / 家目录 / 密钥就位 / 运行时起没起）",
     "brain.probe": "★ 只读往返：问一句、拿回 JSON、带回用量与结束原因（可带 project+order 落账）",
+    "capabilities.prompt": "看清小助手眼里的能力清单长什么样（与 /api/capabilities 同源）",
+    "intent.round": "★ 猜意图一轮：记下用户的话 → 拼要点卡 → 问小助手 → 校验 → 落账（payload.project + payload.order + payload.text 可省）",
     "shutdown": "让常驻进程收工（仅 stdio）",
 }
 
@@ -135,6 +143,20 @@ def handle(action: str, payload: dict | None = None) -> tuple[int, dict]:
             if not isinstance(entry, dict):
                 return 400, {"error": "缺字段", "detail": "需要 entry（JSON 对象）"}
             return 201, {"appended": True, "line": ST.append_transcript(str(pid), str(oid), entry)}
+
+        if action == "capabilities.prompt":
+            return 200, {"prompt": CAP.render_for_prompt()}
+
+        if action == "intent.round":
+            if INTENT_MOD is None or BRAIN is None:
+                return 500, {"error": "猜意图那层没接上", "detail": BRAIN_ERR}
+            pid, oid = payload.get("project"), payload.get("order")
+            if not pid or not oid:
+                return 400, {"error": "缺参数", "detail": "需要 project 与 order"}
+            text = payload.get("text") or ""
+            if not isinstance(text, str):
+                return 400, {"error": "text 必须是字符串", "detail": repr(text)}
+            return 200, INTENT_MOD.round_(str(pid), str(oid), text, brain=BRAIN)
 
         if action == "shutdown":
             return 200, {"bye": True}

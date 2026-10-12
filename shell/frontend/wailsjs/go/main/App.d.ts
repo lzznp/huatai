@@ -8,12 +8,22 @@ export function BrainStatus():Promise<main.Reply>;
 
 export function Capabilities():Promise<main.Reply>;
 
+export function CapabilityPrompt():Promise<main.Reply>;
+
 export function Health():Promise<main.Reply>;
+
+export function IntentRound(arg1:string,arg2:string,arg3:string):Promise<main.Reply>;
 
 export function KernelStatus():Promise<main.Status>;
 
+export function NewOrder(arg1:string,arg2:string):Promise<main.Reply>;
+
 export function NewProject(arg1:string):Promise<main.Reply>;
 
+export function OrderDetail(arg1:string,arg2:string):Promise<main.Reply>;
+
 export function Orders(arg1:string):Promise<main.Reply>;
+
+export function PickImage():Promise<string>;
 
 export function Projects():Promise<main.Reply>;

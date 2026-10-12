@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import copy
+import os
 import sys
 from pathlib import Path
 
@@ -138,12 +140,36 @@ def knobs_declaration() -> list[dict]:
     return out
 
 
+def _apply_test_override(decl: dict) -> dict:
+    """★ 判据钩子（**只在 HUATAI_CAP_SWAP 设了的时候生效**）。
+
+    例：`HUATAI_CAP_SWAP=model3d:1` 表示"假装三维模型能做"。
+    它存在的唯一理由：让"改一处清单 ⇒ 小助手的回答跟着变"这条判据**真的能验**，
+    否则这条只能靠嘴说。平时不设这个环境变量，就完全不生效。
+    """
+    spec = os.environ.get("HUATAI_CAP_SWAP", "").strip()
+    if not spec:
+        return decl
+    for part in spec.split(","):
+        cid, _, val = part.partition(":")
+        want = val.strip().lower() not in ("0", "false", "no", "不能")
+        for c in decl.get("工艺", []):
+            if c.get("id") == cid:
+                c["能不能"] = want
+                if want:
+                    c.pop("为什么不能", None)
+                    c.setdefault("怎么做", "（判据钩子临时打开）")
+                else:
+                    c["为什么不能"] = c.get("为什么不能") or "（判据钩子临时关掉）"
+    return decl
+
+
 def declaration() -> dict:
     """完整能力声明（界面与 agent 的唯一来源）。"""
-    return {
+    decl = {
         "schema": SCHEMA,
-        "工艺": CRAFTS,
-        "料": MATERIALS,
+        "工艺": copy.deepcopy(CRAFTS),
+        "料": copy.deepcopy(MATERIALS),
         "旋钮": knobs_declaration(),
         "局部调整": {
             "网格": "3×3（行优先，0=左上 … 8=右下）",
@@ -151,12 +177,55 @@ def declaration() -> dict:
             "单次上限": K.LOCAL_OP_MAX_AMOUNT,
         },
         "产出": ["PNG 灰度预览", "1bit BMP 上机档", "指标（整图 + 3×3 分区）"],
-        "本版不做": NOT_DOING,
+        "本版不做": list(NOT_DOING),
         "诚实边界": [
             "一张图只能到【可评审的工艺稿】，不承诺'上传一张图 ⇒ 完美成品'",
             "上机极性（暗→黑点）待用户真机验证；反了只改仿色映射，不动局部算子语义",
         ],
     }
+    return _apply_test_override(decl)
+
+
+def render_for_prompt(decl: dict | None = None) -> str:
+    """把能力声明渲染成**给小助手看的**文本。
+
+    ★ 唯一来源就是 `declaration()`。**绝不许在别处手写第二份清单** ——
+    手写第二遍一定会和代码漂移，而漂了就是"假装生效"。
+    """
+    d = decl or declaration()
+
+    能 = [c for c in d["工艺"] if c.get("能不能")]
+    不能 = [c for c in d["工艺"] if not c.get("能不能")]
+    能料 = [m for m in d["料"] if m.get("能不能")]
+    不能料 = [m for m in d["料"] if not m.get("能不能")]
+
+    lines: list[str] = []
+    lines.append("【你能做的工艺】（只能从这些里选，不许发明）")
+    for c in 能:
+        lines.append(f"- {c['名']}（id={c['id']}）：{c.get('怎么做', '')}")
+    if not 能:
+        lines.append("- （一件都做不了）")
+
+    lines.append("")
+    lines.append("【你明确做不到的】（用户要这些，你必须当场说明做不到 + 为什么，不许硬试）")
+    for c in 不能:
+        lines.append(f"- {c['名']}（id={c['id']}）：{c.get('为什么不能', '本版不做')}")
+    for extra in d.get("本版不做", []):
+        lines.append(f"- {extra}")
+
+    lines.append("")
+    lines.append("【你能读的料】" + "、".join(m["名"] for m in 能料))
+    lines.append("【你读不了的料】" + "、".join(f"{m['名']}（{m.get('为什么不能', '没解析器')}）" for m in 不能料))
+
+    lines.append("")
+    lines.append("【你能产出的】" + "、".join(d.get("产出", [])))
+
+    lines.append("")
+    lines.append("【诚实边界】")
+    for s in d.get("诚实边界", []):
+        lines.append(f"- {s}")
+
+    return "\n".join(lines)
 
 
 def can_craft(craft_id: str) -> tuple[bool, str]:

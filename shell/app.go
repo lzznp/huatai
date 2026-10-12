@@ -8,6 +8,8 @@ package main
 import (
 	"context"
 	"time"
+
+	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
@@ -70,5 +72,46 @@ func (a *App) BrainProbe(prompt string) Reply {
 	if prompt != "" {
 		p["prompt"] = prompt
 	}
-	return a.k.Call("brain.probe", p, 5*time.Minute)
+	return a.k.Call("brain.probe", p, brainTimeout)
+}
+
+const brainTimeout = 5 * time.Minute
+
+// ---------------------------------------------------------------- 投料与对话（第 4b 步）
+
+// PickImage 弹系统的选图对话框（只有壳能做这件事，Python 那边做不了）。
+// 取消选择返回空串 —— **那是正常结果，不是错误**。
+func (a *App) PickImage() string {
+	path, err := wailsRuntime.OpenFileDialog(a.ctx, wailsRuntime.OpenDialogOptions{
+		Title: "选一张图（玻璃画 / 叶雕 / 剪纸）",
+		Filters: []wailsRuntime.FileFilter{
+			{DisplayName: "图片 (*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff;*.webp)",
+				Pattern: "*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff;*.webp"},
+		},
+	})
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
+// NewOrder 投料建单（把选到的图收进某个工程）。
+func (a *App) NewOrder(project string, src string) Reply {
+	return a.k.Call("orders.create", map[string]any{"project": project, "src": src}, 60*time.Second)
+}
+
+// OrderDetail 一单全貌：归档 + 流水 + 产物。
+func (a *App) OrderDetail(project string, order string) Reply {
+	return a.k.Call("order.detail", map[string]any{"project": project, "id": order}, 30*time.Second)
+}
+
+// IntentRound ★ 猜意图一轮：把小助手的话拿回来。**要给足超时**（要真调用模型）。
+func (a *App) IntentRound(project string, order string, text string) Reply {
+	return a.k.Call("intent.round",
+		map[string]any{"project": project, "order": order, "text": text}, brainTimeout)
+}
+
+// CapabilityPrompt 看清小助手眼里的能力清单（与界面读的是同一份）——排查用。
+func (a *App) CapabilityPrompt() Reply {
+	return a.k.Call("capabilities.prompt", nil, 20*time.Second)
 }

@@ -13,6 +13,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +44,22 @@ func scEq(got, want any, msg string) {
 	} else {
 		scFailf(msg, fmt.Sprintf("期望 %v，实得 %v", want, got))
 	}
+}
+
+// scMakePng 造一张自检用的图（不依赖盘上任何素材）。
+func scMakePng(path string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	img := image.NewGray(image.Rect(0, 0, 32, 32))
+	for y := 0; y < 32; y++ {
+		for x := 0; x < 32; x++ {
+			img.SetGray(x, y, color.Gray{Y: uint8(60 + x*6)})
+		}
+	}
+	return png.Encode(f, img)
 }
 
 // scResult 把 Reply 的 Result 解成 map（失败时返回 nil 并把错误记下来）
@@ -175,8 +194,34 @@ func selfcheck(app *App, withBrain bool) int {
 			scOK(fmt.Sprintf("10.8 这一轮：finish_reason=%v  truncated=%v  elapsed_ms=%v  total=%v",
 				m["finish_reason"], m["truncated"], m["elapsed_ms"], u["totalTokens"]))
 		}
+
+		// 11 投料 + 猜意图一轮（★ 界面走的就是这条路：选图 → 建单 → 问小助手）
+		srcPng := filepath.Join(tmp, "自检料.png")
+		if err := scMakePng(srcPng); err != nil {
+			scFailf("11.1 造一张自检用的图", err.Error())
+		} else {
+			scOK("11.1 造了一张自检用的图（32×32 渐变）")
+			if m := scResult(app.NewOrder("自检工程", srcPng), "11.2 投料建单"); m != nil {
+				oid := fmt.Sprintf("%v", m["order_id"])
+				if m2 := scResult(app.IntentRound("自检工程", oid, ""), "11.3 猜意图一轮（真调用模型）"); m2 != nil {
+					rep, _ := m2["reply"].(map[string]any)
+					scEq(fmt.Sprintf("%v", rep["ok"]), "true", "11.4 小助手回了话，且是合法 JSON")
+					scEq(fmt.Sprintf("%v", m2["合法"]), "true", "11.5 它的回答过了校验器")
+					parsed, _ := rep["parsed"].(map[string]any)
+					scEq(fmt.Sprintf("%v", parsed["action"]), "ask", "11.6 ★ 没被告知意图时它主动问")
+					scEq(strings.TrimSpace(fmt.Sprintf("%v", parsed["question"])) != "", true, "11.7 ★ 确实问了话")
+					scOK(fmt.Sprintf("11.8 它问的是：%v", parsed["question"]))
+					// 账要落得住
+					if det := scResult(app.OrderDetail("自检工程", oid), "11.9 读这一单的账"); det != nil {
+						ents, _ := det["流水"].([]any)
+						scEq(len(ents) >= 2, true, "11.10 ★ 流水里至少有「料」和「小助手的话」")
+					}
+				}
+			}
+		}
 	} else {
 		fmt.Println("[跳过] 10.5~10.8 真机往返（要花钱；想跑就加 --with-brain）")
+		fmt.Println("[跳过] 11.x 投料 + 猜意图（同样要花钱）")
 	}
 
 	fmt.Println()

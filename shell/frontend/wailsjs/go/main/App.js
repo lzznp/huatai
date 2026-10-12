@@ -14,20 +14,40 @@ export function Capabilities() {
   return window['go']['main']['App']['Capabilities']();
 }
 
+export function CapabilityPrompt() {
+  return window['go']['main']['App']['CapabilityPrompt']();
+}
+
 export function Health() {
   return window['go']['main']['App']['Health']();
+}
+
+export function IntentRound(arg1, arg2, arg3) {
+  return window['go']['main']['App']['IntentRound'](arg1, arg2, arg3);
 }
 
 export function KernelStatus() {
   return window['go']['main']['App']['KernelStatus']();
 }
 
+export function NewOrder(arg1, arg2) {
+  return window['go']['main']['App']['NewOrder'](arg1, arg2);
+}
+
 export function NewProject(arg1) {
   return window['go']['main']['App']['NewProject'](arg1);
 }
 
+export function OrderDetail(arg1, arg2) {
+  return window['go']['main']['App']['OrderDetail'](arg1, arg2);
+}
+
 export function Orders(arg1) {
   return window['go']['main']['App']['Orders'](arg1);
+}
+
+export function PickImage() {
+  return window['go']['main']['App']['PickImage']();
 }
 
 export function Projects() {
