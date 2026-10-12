@@ -58,7 +58,7 @@ func scResult(r Reply, msg string) map[string]any {
 	return m
 }
 
-func selfcheck(app *App) int {
+func selfcheck(app *App, withBrain bool) int {
 	k := app.k
 
 	fmt.Println("=== 画台 · 无头自检 ===")
@@ -156,6 +156,28 @@ func selfcheck(app *App) int {
 	// 9 收工不留僵尸
 	k.Stop()
 	scEq(k.Status().Running, false, "9.1 shutdown 之后内核状态 running=false")
+
+	// 10 大脑（**免费那一半**：只读状态，不联网、不花钱）
+	if m := scResult(app.BrainStatus(), "10.1 大脑状态可读（不联网）"); m != nil {
+		scEq(m["密钥就位"], true, "10.2 密钥就位（从项目根 .env 读到）")
+		scEq(m["运行时已起"], false, "10.3 ★ 懒启动：只问状态不会拉起运行时")
+		scOK("10.4 cwd 收窄目录 = " + fmt.Sprintf("%v", m["cwd"]))
+	}
+
+	// 10b 真跑一轮（**花钱**，必须显式加 --with-brain 才做）
+	if withBrain {
+		fmt.Println("（--with-brain：要真调用一次模型，会花钱）")
+		r := app.BrainProbe("")
+		if m := scResult(r, "10.5 真机往返：拿回合法 JSON"); m != nil {
+			scEq(strings.TrimSpace(fmt.Sprintf("%v", m["finish_reason"])) != "", true, "10.6 结束原因如实回来")
+			u, _ := m["usage"].(map[string]any)
+			scEq(u != nil && fmt.Sprintf("%v", u["计费轮次"]) != "0", true, "10.7 用量如实回来")
+			scOK(fmt.Sprintf("10.8 这一轮：finish_reason=%v  truncated=%v  elapsed_ms=%v  total=%v",
+				m["finish_reason"], m["truncated"], m["elapsed_ms"], u["totalTokens"]))
+		}
+	} else {
+		fmt.Println("[跳过] 10.5~10.8 真机往返（要花钱；想跑就加 --with-brain）")
+	}
 
 	fmt.Println()
 	if len(scFail) > 0 {

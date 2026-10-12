@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -27,6 +28,9 @@ from knobs import validate_knobs, validate_local_ops
 # 项目根 = 本文件所在目录（bestpic/）
 ROOT = Path(__file__).resolve().parent
 
+# 结束原因里代表"输出被截断"的那些（SDK 给的是字符串，别只比一个写法）
+TRUNCATED_REASONS = ("max-tokens", "maxtokens", "max_tokens", "length", "length-limit")
+
 
 @dataclass
 class AgentReply:
@@ -37,6 +41,17 @@ class AgentReply:
     parsed: dict = field(default_factory=dict)   # 解析出的 JSON
     error: str = ""                # 失败原因（ok=False 时有用）
     activity: list[str] = field(default_factory=list)  # agent 处理过程摘要（给人看）
+    # ↓ FIX-2（2026-10-12 补）：结束原因与用量必须显式上报。
+    #   否则"被截断"在界面上和"没给出 JSON"长得一模一样，只能靠猜。
+    finish_reason: str = ""        # 来自 RunResult.finish_reason
+    usage: dict = field(default_factory=dict)   # 口径见 collect_usage()
+    elapsed_ms: int = 0            # 这一轮花了多久
+
+    @property
+    def truncated(self) -> bool:
+        """这一轮是不是因为输出上限被截断了。"""
+        return (self.finish_reason or "").strip().lower() in TRUNCATED_REASONS
+
     # 便捷访问
     @property
     def action(self) -> str:
@@ -97,6 +112,34 @@ def summarize_events(events: list[dict], *, max_lines: int = 30) -> list[str]:
             lines.append("…（过程过长，已截断）")
             break
     return lines
+
+
+def collect_usage(events: list[dict]) -> dict:
+    """把 events 里的用量汇总起来（**口径必须跟着数字走**，别只报一个总数）。
+
+    口径（照 DSH 的字段含义，老项目踩过一次"转述丢量级"）：
+    - `inputTokens` **不含**缓存读；缓存读单独在 `cacheReadTokens`
+    - `reasoningTokens` 是 `outputTokens` 的**子集**，**不能相加**
+    - `totalTokens = inputTokens + cacheReadTokens + outputTokens`
+    """
+    tot = {"inputTokens": 0, "cacheReadTokens": 0, "outputTokens": 0,
+           "reasoningTokens": 0, "计费轮次": 0}
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        if str(ev.get("type", "")) != "assistant/message":
+            continue
+        data = ev.get("data")
+        usage = (data or {}).get("usage") if isinstance(data, dict) else None
+        if not isinstance(usage, dict) or not usage:
+            continue
+        tot["计费轮次"] += 1
+        for k in ("inputTokens", "cacheReadTokens", "outputTokens", "reasoningTokens"):
+            v = usage.get(k)
+            if isinstance(v, (int, float)):
+                tot[k] += int(v)
+    tot["totalTokens"] = tot["inputTokens"] + tot["cacheReadTokens"] + tot["outputTokens"]
+    return tot
 
 
 def _load_key() -> str:
@@ -174,13 +217,25 @@ class AgentBridge:
         多模态看；但 v1 先走纯文字（JSON 判断），看图迭代放 v2。
         """
         harness = self._ensure_harness()
+        t0 = time.monotonic()
         result = harness.run(prompt, session_id=session_id)
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
         raw = result.final_response or ""
-        reply = AgentReply(ok=False, raw=raw, activity=summarize_events(result.events))
+        reply = AgentReply(
+            ok=False,
+            raw=raw,
+            activity=summarize_events(getattr(result, "events", []) or []),
+            finish_reason=str(getattr(result, "finish_reason", "") or ""),
+            usage=collect_usage(getattr(result, "events", []) or []),
+            elapsed_ms=elapsed_ms,
+        )
         try:
             reply.parsed = _extract_json(raw)
         except (ValueError, json.JSONDecodeError) as e:
-            reply.error = f"JSON 解析失败: {e}"
+            # ★ 截断必须**显式**说出来：否则"被截断"和"没给出 JSON"在界面上长得一样
+            hint = "（这一轮被输出上限截断了：finish_reason=%s。建议把要求说短，或新开一单）" % reply.finish_reason \
+                if reply.truncated else ""
+            reply.error = f"JSON 解析失败: {e}{hint}"
             return reply
         # 若带 knobs，校验合法性（铁律：不许发明旋钮、不许超范围）
         if reply.parsed.get("knobs"):

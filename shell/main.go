@@ -16,10 +16,20 @@ func main() {
 	app := NewApp()
 
 	// 无头自检：不开窗口把整条链验一遍（"看不见界面 = 验不了"的解法）
+	// --with-brain 会真调用一次模型（花钱），默认不做。
+	// 注意：先把两个开关都扫完再动手 —— 否则 `--selfcheck --with-brain` 会因为
+	// 先碰到 --selfcheck 就直接退出，把后面的参数漏掉。
+	withBrain, doCheck := false, false
 	for _, a := range os.Args[1:] {
-		if a == "--selfcheck" || a == "-selfcheck" {
-			os.Exit(selfcheck(app))
+		switch a {
+		case "--with-brain":
+			withBrain = true
+		case "--selfcheck", "-selfcheck":
+			doCheck = true
 		}
+	}
+	if doCheck {
+		os.Exit(selfcheck(app, withBrain))
 	}
 
 	err := wails.Run(&options.App{
