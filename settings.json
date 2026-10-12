@@ -1,0 +1,7 @@
+{
+  "_说明": "画台的本地设置。改这里不用改代码；环境变量优先级更高（HUATAI_PYTHON / HUATAI_PROJECTS）。",
+  "python": "C:\\ProgramData\\miniconda3\\envs\\bestpic\\python.exe",
+  "_python_说明": "跑内核（server\\stdio.py）的解释器。必须在装有 numpy / Pillow / deepseek-harness-sdk 的那个环境里。",
+  "projects": "D:\\画台\\projects",
+  "_projects_说明": "工程项目数据根。留空则用 <项目根>\\projects。"
+}
