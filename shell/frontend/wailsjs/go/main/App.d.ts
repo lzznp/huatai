@@ -22,10 +22,14 @@ export function NewProject(arg1:string):Promise<main.Reply>;
 
 export function OrderDetail(arg1:string,arg2:string):Promise<main.Reply>;
 
+export function OrderImage(arg1:string,arg2:string,arg3:string,arg4:number):Promise<main.Reply>;
+
 export function Orders(arg1:string):Promise<main.Reply>;
 
 export function PickImage():Promise<string>;
 
 export function Projects():Promise<main.Reply>;
+
+export function RenderRun(arg1:string,arg2:string,arg3:string,arg4:string):Promise<main.Reply>;
 
 export function SessionLatest():Promise<main.Reply>;

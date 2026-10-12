@@ -36,6 +36,12 @@ except Exception as e:             # noqa: BLE001
     INTENT_MOD = None
     BRAIN_ERR = BRAIN_ERR or f"{type(e).__name__}: {e}"
 
+try:
+    from . import render as RENDER_MOD
+except Exception as e:             # noqa: BLE001
+    RENDER_MOD = None
+    BRAIN_ERR = BRAIN_ERR or f"{type(e).__name__}: {e}"
+
 SERVICE = "画台·服务"
 VERSION = "0.3.0"
 
@@ -54,7 +60,9 @@ ACTIONS: dict[str, str] = {
     "brain.status": "大脑状态（模型 / 家目录 / 密钥就位 / 运行时起没起）",
     "brain.probe": "★ 只读往返：问一句、拿回 JSON、带回用量与结束原因（可带 project+order 落账）",
     "capabilities.prompt": "看清小助手眼里的能力清单长什么样（与 /api/capabilities 同源）",
-    "intent.round": "★ 猜意图一轮：记下用户的话 → 拼要点卡 → 问小助手 → 校验 → 落账（payload.project + payload.order + payload.text 可省）",
+    "intent.round": "★ 小助手一轮：要么问（ask）、要么给参数出图（render）；都会落账",
+    "render.run": "★ 出图一版：给参数 → 调确定性管线 → 产物落 out\\ + 独立回读 BMP + 落账",
+    "order.image": "把某一版产物读成 data URL（payload.project + payload.order，可选 which/ver）",
     "shutdown": "让常驻进程收工（仅 stdio）",
 }
 
@@ -161,6 +169,38 @@ def handle(action: str, payload: dict | None = None) -> tuple[int, dict]:
             if not isinstance(text, str):
                 return 400, {"error": "text 必须是字符串", "detail": repr(text)}
             return 200, INTENT_MOD.round_(str(pid), str(oid), text, brain=BRAIN)
+
+        if action == "order.image":
+            pid, oid = payload.get("project"), payload.get("order")
+            if not pid or not oid:
+                return 400, {"error": "缺参数", "detail": "需要 project 与 order"}
+            which = str(payload.get("which") or "png")
+            if which not in ("png", "bmp"):
+                return 400, {"error": "which 只能是 png 或 bmp", "detail": repr(which)}
+            ver = payload.get("ver")
+            return 200, ST.order_image(str(pid), str(oid), which,
+                                       ver=int(ver) if ver is not None else None)
+
+        if action == "render.run":
+            if RENDER_MOD is None:
+                return 500, {"error": "出图那层没接上", "detail": BRAIN_ERR}
+            pid, oid = payload.get("project"), payload.get("order")
+            if not pid or not oid:
+                return 400, {"error": "缺参数", "detail": "需要 project 与 order"}
+            knobs = payload.get("knobs") or {}
+            if not isinstance(knobs, dict):
+                return 400, {"error": "knobs 必须是 JSON 对象", "detail": repr(knobs)}
+            ops = payload.get("local") or payload.get("local_ops")
+            if ops is not None and not isinstance(ops, list):
+                return 400, {"error": "local 必须是数组", "detail": repr(ops)}
+            mm = payload.get("physical_mm")
+            res = RENDER_MOD.render_order(
+                str(pid), str(oid), knobs=knobs, local_ops=ops,
+                physical_mm=float(mm) if mm is not None else RENDER_MOD.DEFAULT_MM,
+                dpi=int(payload.get("dpi") or RENDER_MOD.DEFAULT_DPI),
+                note=str(payload.get("note") or ""),
+            )
+            return 201, res
 
         if action == "shutdown":
             return 200, {"bye": True}

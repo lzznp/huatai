@@ -183,6 +183,73 @@ def get_order(project: str, order_id: str) -> dict | None:
     return _orders.load_order(order_id, project)
 
 
+def save_render(project: str, order_id: str, *, history: list, last_report: dict,
+                local_ops: list | None = None, created_at: str | None = None) -> Path:
+    """出图之后更新整单归档。
+
+    ★ 必须**保留原有字段**（`src_path` / `src_name` / `pending` / `first_request` / `first_mm`）——
+    只覆盖 `history` / `last_report` / `local_ops`。
+    否则就是"旋钮静默归零"那一类 bug 在**订单层**的翻版：一次出图把别的东西悄悄冲掉了。
+    """
+    _bind()
+    data = get_order(project, order_id) or {}
+    return _orders.save_order(
+        order_id,
+        history=history,
+        src_path=data.get("src_path"),
+        src_name=data.get("src_name") or "",
+        project=project,
+        last_report=last_report,
+        created_at=created_at or data.get("created_at"),
+        pending=data.get("pending"),
+        first_request=data.get("first_request"),
+        first_mm=data.get("first_mm"),
+        local_ops=list(local_ops if local_ops is not None else (data.get("local_ops") or [])),
+    )
+
+
+def order_image(project: str, order_id: str, which: str = "png", *, ver: int | None = None) -> dict:
+    """把某一版产物读成 data URL 给界面显示（壳只搬字节，不解图）。
+
+    which: "png"（预览）或 "bmp"（上机档点阵）
+    ver:   要哪一版；不给就取最新那一版
+    ★ 每张都带 sha256 —— 界面显示的和账里记的是不是同一张，一对便知。
+    """
+    import base64
+    import hashlib
+
+    data = get_order(project, order_id)
+    if data is None:
+        raise FileNotFoundError(f"没找到这张单：{project}\\{order_id}")
+
+    history = [h for h in (data.get("history") or []) if h.get(_IMG_KEY[which])]
+    if not history:
+        raise FileNotFoundError("这一单还没有出过图（先让助手出一版）")
+
+    if ver is None:
+        item = history[-1]
+    else:
+        match = [h for h in history if int(h.get("ver") or 0) == int(ver)]
+        if not match:
+            raise FileNotFoundError(f"没有第 {ver} 版")
+        item = match[-1]
+
+    p = Path(item[_IMG_KEY[which]])
+    if not p.is_file():
+        raise FileNotFoundError(f"账里有这一版，但文件不在了：{p}")
+
+    raw = p.read_bytes()
+    mime = "image/png" if p.suffix.lower() == ".png" else "image/bmp"
+    return {
+        "路径": str(p),
+        "名字": p.name,
+        "字节": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "版本": int(item.get("ver") or 0),
+        "data_url": f"data:{mime};base64," + base64.b64encode(raw).decode("ascii"),
+    }
+
+
 # ================================================================ 订单（单 = 一张图 + 一段对话）
 #
 # 账的形状（一单一个目录，**只进不改 + 只追加**）：
@@ -196,6 +263,10 @@ def get_order(project: str, order_id: str) -> dict | None:
 # 一个工程可以有很多单（很多张图）。
 
 TRANSCRIPT_NAME = "transcript.jsonl"
+
+# 订单历史里产物的键名：预览图叫 "img"（内核 orders.py 的老约定），上机档叫 "bmp"。
+# 别拿 which 直接当键去查 —— 本文件建立当天就因为这个取不到图（测试抓出来的）。
+_IMG_KEY = {"png": "img", "bmp": "bmp"}
 
 # 流水里每行都必须带 kind —— 参考包判据「流水三分」：人说的话 / 壳塞进去的材料 /
 # 机器出的结论，**三者不许混**（界面要分开显示，否则聊天里掺满内部日志）。

@@ -174,6 +174,30 @@ func selfcheck(app *App, withBrain bool) int {
 				scEq(fmt.Sprintf("%v", latest["order_id"]), madeOrder, "5.8 ★ 最近一单＝刚建的那一单")
 				scEq(fmt.Sprintf("%v", latest["project"]), "自检工程", "5.9 归属的工程也对")
 			}
+
+			// 5.10+ 出一版图（**免费**）：产物必须真落盘，且同参数逐字节可复现
+			if m := scResult(app.RenderRun("自检工程", madeOrder, `{"素描感强度":0.6}`, ""), "5.10 出图一版（免费，走确定性管线）"); m != nil {
+				prod, _ := m["产物"].(map[string]any)
+				for _, k := range []string{"png", "bmp"} {
+					p, _ := prod[k].(string)
+					if fi, err := os.Stat(p); err == nil && fi.Size() > 0 {
+						scOK(fmt.Sprintf("5.11 产物真的落盘：%s（%d 字节）", filepath.Base(p), fi.Size()))
+					} else {
+						scFailf("5.11 产物落盘 "+k, fmt.Sprintf("%v %v", p, err))
+					}
+				}
+				rb, _ := m["回读"].(map[string]any)
+				scEq(fmt.Sprintf("%v", rb["对得上"]), "true", "5.12 ★ 独立回读（BMP 反算）与管线自报对得上")
+				scEq(fmt.Sprintf("%v", m["本次写了但没生效的旋钮"]), "[]", "5.13 没有'写了却不生效'的旋钮")
+				if m2 := scResult(app.RenderRun("自检工程", madeOrder, `{"素描感强度":0.6}`, ""), "5.14 同参数再出一版"); m2 != nil {
+					rb2, _ := m2["回读"].(map[string]any)
+					scEq(fmt.Sprintf("%v", rb2["sha256"]), fmt.Sprintf("%v", rb["sha256"]), "5.15 ★ 同参数逐字节可复现")
+				}
+				if im := scResult(app.OrderImage("自检工程", madeOrder, "png", 0), "5.16 界面能取到最新一版图"); im != nil {
+					du, _ := im["data_url"].(string)
+					scEq(strings.HasPrefix(du, "data:image/png;base64,"), true, "5.17 ★ 给的是可直接显示的 data URL")
+				}
+			}
 		}
 	}
 

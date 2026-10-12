@@ -42,6 +42,10 @@ export function OrderDetail(arg1, arg2) {
   return window['go']['main']['App']['OrderDetail'](arg1, arg2);
 }
 
+export function OrderImage(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['OrderImage'](arg1, arg2, arg3, arg4);
+}
+
 export function Orders(arg1) {
   return window['go']['main']['App']['Orders'](arg1);
 }
@@ -52,6 +56,10 @@ export function PickImage() {
 
 export function Projects() {
   return window['go']['main']['App']['Projects']();
+}
+
+export function RenderRun(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['RenderRun'](arg1, arg2, arg3, arg4);
 }
 
 export function SessionLatest() {

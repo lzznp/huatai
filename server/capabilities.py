@@ -164,6 +164,32 @@ def _apply_test_override(decl: dict) -> dict:
     return decl
 
 
+def render_knobs_for_prompt(decl: dict | None = None) -> str:
+    """旋钮清单 + 局部调整词汇（**给小助手看的**）。
+
+    ★ 同源：定义来自 `knobs.KNOBS`，"已实现 / 缺口"来自 `pipeline`。
+    标了「缺口」的旋钮**不许假装生效**——用户要那个效果时它必须说清楚。
+    """
+    d = decl or declaration()
+    lines = ["【旋钮清单】（只能从这些里选，不许发明新旋钮）"]
+    for k in d["旋钮"]:
+        gap = "　←★缺口：还没实现，用户要这个效果时必须明说做不到" if k["状态"] == "缺口" else ""
+        lines.append(f"- {k['名']}：范围[{k['范围'][0]}, {k['范围'][1]}]　默认 {k['默认']}　"
+                     f"含义：{k['含义']}（作用：{k['作用']}）{gap}")
+    la = d.get("局部调整") or {}
+    lines += [
+        "",
+        f"【局部调整】图切成 {la.get('网格', '3×3')}；动作只能是 {la.get('动作')}；"
+        f"单次 amount 上限 {la.get('单次上限')}（**建议 ≤0.5**，过猛会毁掉过渡带）",
+        "local 是**全量口径**：每次写全你认为该生效的那些局部调整；要还原某格就写 {\"zone\": X, \"op\": \"reset\"}，"
+        "不要用反向数值去抵消。",
+        "",
+        "【旋钮怎么填】**只写你这次要改的那几个**；没写的会保持上一版的值（累积），"
+        "所以要把某个旋钮拉回默认值，请**显式写出默认值**。",
+    ]
+    return "\n".join(lines)
+
+
 def declaration() -> dict:
     """完整能力声明（界面与 agent 的唯一来源）。"""
     decl = {

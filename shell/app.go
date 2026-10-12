@@ -7,6 +7,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -109,6 +111,39 @@ func (a *App) NewOrder(project string, src string) Reply {
 // OrderDetail 一单全貌：归档 + 流水 + 产物。
 func (a *App) OrderDetail(project string, order string) Reply {
 	return a.k.Call("order.detail", map[string]any{"project": project, "id": order}, 30*time.Second)
+}
+
+// OrderImage 取某一版产物给界面显示（壳只搬字节，不解图）。
+// which: "png" 预览 / "bmp" 上机档点阵；ver<=0 表示要最新那一版。
+func (a *App) OrderImage(project string, order string, which string, ver int) Reply {
+	p := map[string]any{"project": project, "order": order}
+	if strings.TrimSpace(which) != "" {
+		p["which"] = which
+	}
+	if ver > 0 {
+		p["ver"] = ver
+	}
+	return a.k.Call("order.image", p, 60*time.Second)
+}
+
+// RenderRun 手动出一版（★ 界面平时靠"小助手一轮"自动出；这个是给自检和排查用的）。
+func (a *App) RenderRun(project string, order string, knobsJSON string, localJSON string) Reply {
+	p := map[string]any{"project": project, "order": order}
+	if strings.TrimSpace(knobsJSON) != "" {
+		var k map[string]any
+		if err := json.Unmarshal([]byte(knobsJSON), &k); err != nil {
+			return Reply{OK: false, Status: 400, Error: "knobs 不是合法 JSON", Detail: err.Error()}
+		}
+		p["knobs"] = k
+	}
+	if strings.TrimSpace(localJSON) != "" {
+		var ops []any
+		if err := json.Unmarshal([]byte(localJSON), &ops); err != nil {
+			return Reply{OK: false, Status: 400, Error: "local 不是合法 JSON 数组", Detail: err.Error()}
+		}
+		p["local"] = ops
+	}
+	return a.k.Call("render.run", p, 2*time.Minute)
 }
 
 // IntentRound ★ 猜意图一轮：把小助手的话拿回来。**要给足超时**（要真调用模型）。

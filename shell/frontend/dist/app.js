@@ -152,6 +152,7 @@ async function openOrder(oid) {
 
 async function refreshOrder() {
   const box = $('chat');
+  $('preview').classList.add('hidden');       // 先藏，等确认有产物再显示
   if (!currentOrder) {
     box.innerHTML = currentProject
       ? '<div class="msg system"><div class="who">系统</div><div class="txt">这个工程还没有单 —— 点右上角「＋ 投料（选一张图）」选一张图，我就建一单，然后小助手会先猜你要做什么。</div></div>'
@@ -161,8 +162,27 @@ async function refreshOrder() {
   const r = await window.go.main.App.OrderDetail(currentProject.id, currentOrder);
   if (!r.ok) { showErr(r, '读这一单'); return; }
   const d = r.result;
-  $('meta').textContent = `目录名 ${currentProject.id} ｜ 产物 ${(d['产物'] || []).length} 个`;
+  const ord = d['订单'] || {};
+  $('meta').textContent = `目录名 ${currentProject.id} ｜ ${ord.n_ver || 0} 版 ｜ 产物 ${(d['产物'] || []).length} 个`;
   renderChat(d['流水'] || [], d['流水坏行'] || 0);
+  await refreshPreview(ord);
+}
+
+// ★ 出图之后，最新一版要在这儿看得见（图 + 指标 + 上机档名）
+async function refreshPreview(ord) {
+  if (!(ord.n_ver > 0)) return;
+  const r = await window.go.main.App.OrderImage(currentProject.id, currentOrder, 'png', 0);
+  if (!r.ok) return;
+  const res = r.result || {};
+  const rep = ord.last_report || {};
+  const m = rep.metrics || {};
+  const rb = rep.bmp ? String(rep.bmp).split('\\').pop() : '';
+  $('previewImg').src = res.data_url;
+  $('previewCap').textContent =
+    `第 ${res.版本} 版　${(rep.pixels || []).join('×')}px @${rep.dpi}dpi\n` +
+    `暗部 ${m.dark_pct}% ・ 亮部 ${m.light_pct}% ・ 墨点 ${m.ink_pct}%\n` +
+    `上机档：${rb}\n图 sha256 ${String(res.sha256).slice(0, 16)}…（与账里记的是同一张）`;
+  $('preview').classList.remove('hidden');
 }
 
 const KIND_LABEL = { material: '料', user: '你', assistant: '小助手', action: '动作', system: '系统' };
