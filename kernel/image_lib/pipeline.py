@@ -183,7 +183,13 @@ def _apply_local_ops(arr: np.ndarray, node_ops: list[dict]) -> np.ndarray:
     for item in node_ops:
         op = str(item["op"])
         amount = float(item.get("amount", 0.5))
-        mask = _zone_mask(item["zones"], work.shape)
+        # 指哪儿：老账是 zones（九宫格），2026-10-13 起也支持 region（人话位置词）
+        if "region" in item:
+            import regions as RG
+            r = RG.get(item["region"])
+            mask = r.mask(work.shape[1], work.shape[0]).astype(np.float64)
+        else:
+            mask = _zone_mask(item["zones"], work.shape)
         if op == "brighten":
             target = np.clip(work + 60.0 * amount, 0.0, 255.0)
         elif op == "darken":
@@ -267,27 +273,45 @@ def _save_1bit_bmp(binary: np.ndarray, path: str | Path, dpi: int) -> None:
 def _prepare_local_ops(local_ops) -> list[dict]:
     """把外部传入的 local_ops 规范成"渲染计划"（有序节点操作列表）。
 
-    接受两种形态：
-    - 词汇表形态：{"zone": 4, "op": "brighten", "amount": 0.3} / [ … ]（agent 与界面用）；
-    - 已归并形态：{"op": "brighten", "amount": 0.3, "zones": [3, 4, 5]}（累积重放用）。
+    接受三种形态：
+    - 词汇表形态：{"zone": 4, "op": "brighten", "amount": 0.3} / [ … ]（老：九宫格）；
+    - ★ 位置词形态：{"region": "left", "op": "brighten", "amount": 0.3}（2026-10-13 加，
+      人话位置，见 kernel\\regions.py）；
+    - 已归并形态：{"op": "brighten", "amount": 0.3, "zones": [3, 4, 5]} /
+      {"op": …, "region": "left"}（累积重放用）。
     都为空 → 返回 []（= 不做局部调整）。
     """
     if not local_ops:
         return []
     items = [local_ops] if isinstance(local_ops, dict) else list(local_ops)
-    if items and isinstance(items[0], dict) and "zones" in items[0]:
+    if items and isinstance(items[0], dict) and ("zones" in items[0] or "regions" in items[0]):
         plan: list[dict] = []
         for it in items:
-            zones = [int(z) for z in it["zones"]]
-            bad = [z for z in zones if not 0 <= z < ZONE_COUNT]
-            if bad:
-                raise ValueError(f"局部调整 zone 越界: {bad}（只能是 0~{ZONE_COUNT - 1}）")
             op = str(it["op"])
             if op not in ZONE_OPS:
                 raise ValueError(f"未知局部动作: {op!r}（允许 {list(ZONE_OPS)}）")
-            plan.append({"op": op, "amount": float(it.get("amount", 0.5)), "zones": zones})
+            amount = float(it.get("amount", 0.5))
+            if "zones" in it:
+                zones = [int(z) for z in it["zones"]]
+                bad = [z for z in zones if not 0 <= z < ZONE_COUNT]
+                if bad:
+                    raise ValueError(f"局部调整 zone 越界: {bad}（只能是 0~{ZONE_COUNT - 1}）")
+                plan.append({"op": op, "amount": amount, "zones": zones})
+            else:
+                import regions as RG
+                for key in it["regions"]:
+                    _raise_region(key)
+                    plan.append({"op": op, "amount": amount, "region": RG.coerce(key)})
         return plan
     return normalize_local_ops(items)
+
+
+def _raise_region(key) -> None:
+    """归并形态里的 region 键也要过校验（未知键抛 ValueError，不许静默）。"""
+    import regions as RG
+    ok, err = RG.validate(key)
+    if not ok:
+        raise ValueError(err)
 
 
 def render_grayscale(

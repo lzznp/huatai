@@ -185,6 +185,8 @@ class AgentBridge:
         profile: str = "sdk-minimal",
         dsh_home: str | Path | None = None,
         workspace: str | Path | None = None,
+        max_tokens: int = 8192,
+        reasoning_effort: str | None = None,
     ) -> None:
         self._harness: DeepSeekHarness | None = None
         self._api_key = _load_key()
@@ -194,20 +196,30 @@ class AgentBridge:
         self._dsh_home = Path(dsh_home) if dsh_home else ROOT / ".dsh_home"
         # workspace：给 agent 看到的"现场"——放 assets，图片在这里交接
         self._workspace = Path(workspace) if workspace else ROOT / "assets"
+        # ★ 2026-10-13 新增两个**可选**旋钮（默认值 = 老行为，不传就等于没改）：
+        #   max_tokens：输出预算。原写死 8192；实测"带位置的局部调整"那一轮
+        #               输出达 8191 token ⇒ 顶到天花板 → finish_reason=max-tokens → 整轮作废。
+        #   reasoning_effort：内部推理预算（SDK 支持）。实测输出的大头是推理，
+        #               调低它才是治本（见 tests\exp_effort.py）。
+        self._max_tokens = int(max_tokens)
+        self._reasoning_effort = reasoning_effort
 
     def _ensure_harness(self) -> DeepSeekHarness:
         if self._harness is None:
-            self._harness = DeepSeekHarness(
+            opts: dict = dict(
                 provider="deepseek-official",
                 model=self._model,
                 # 8192：输出预算大一点，防 agent 长上下文下 JSON 没写完就被截断
                 # （曾出现 turn/end: max-tokens → 回复里找不到 JSON）
-                max_tokens=8192,
+                max_tokens=self._max_tokens,
                 api_key=self._api_key,
                 cwd=str(self._workspace.resolve()),
                 dsh_home=str(self._dsh_home.resolve()),
                 profile=self._profile,
             )
+            if self._reasoning_effort:
+                opts["reasoning_effort"] = self._reasoning_effort
+            self._harness = DeepSeekHarness(**opts)
         return self._harness
 
     def ask(self, prompt: str, *, session_id: str | None = None) -> AgentReply:

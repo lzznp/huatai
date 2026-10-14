@@ -32,10 +32,19 @@
       <!-- 单（物料）横条：点一下切换；不用点也能看到最近一单的对话 -->
       <div id="orders" class="chips hidden"></div>
 
-      <!-- ★ 最新一版预览：出图之后就在这儿看得见 -->
+      <!-- ★ 出图预览：版本条（全部版本可选、可挑两版并排）+ 九宫格标签 + 放大窗口 -->
       <div id="preview" class="preview hidden">
-        <img id="previewImg" alt="最新一版预览" />
-        <div id="previewCap" class="note"></div>
+        <div class="pv-head">
+          <span id="pvTitle" class="pv-title">预览</span>
+          <span id="pvMeta" class="note"></span>
+          <span class="pv-tools">
+            <button id="btnView" type="button" class="mini" title="单张放大看（滚轮缩放、拖动平移、空格切九宫格、Esc 关闭）">放大</button>
+            <button id="btnGrid" type="button" class="mini" title="在图上线出 9 格并标号（0 左上 … 8 右下）——你说“第 4 格”，小助手看的是同一格；这一版账里没记格号时只画格不标号">格号</button>
+            <button id="btnOne" type="button" class="mini" title="只显示最新一版">单张</button>
+          </span>
+        </div>
+        <div id="pvBar" class="pv-bar"></div>
+        <div id="pvPanes" class="pv-panes"></div>
       </div>
 
       <!-- 对话区 -->
@@ -56,6 +65,31 @@
         <div id="sayHint" class="hint line">…</div>
       </div>
     </main>
+  </div>
+
+  <!-- 放大窗口（默认藏；点「放大」才出现） -->
+  <div id="zoom" class="zoom hidden">
+    <div class="zoom-bar">
+      <span id="zoomTitle">放大看</span>
+      <span class="zoom-tools">
+        <button id="btnZoomOut" type="button" class="mini">−</button>
+        <span id="zoomPct" class="note">100%</span>
+        <button id="btnZoomIn" type="button" class="mini">＋</button>
+        <button id="btnZoomFit" type="button" class="mini">适应</button>
+        <button id="btnZoomOne" type="button" class="mini">1:1</button>
+        <button id="btnZoomGrid" type="button" class="mini">格号</button>
+        <button id="btnZoomPrev" type="button" class="mini">上一版</button>
+        <button id="btnZoomNext" type="button" class="mini">下一版</button>
+        <button id="btnZoomClose" type="button" class="mini">关闭</button>
+      </span>
+    </div>
+    <div id="zoomStage" class="zoom-stage">
+      <div id="zoomInner" class="zoom-inner">
+        <img id="zoomImg" alt="放大预览" />
+        <div id="zoomGrid" class="grid-layer hidden"></div>
+      </div>
+    </div>
+    <div id="zoomCap" class="zoom-cap note"></div>
   </div>
 
   <script src="app.js"></script>

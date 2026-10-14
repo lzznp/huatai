@@ -75,7 +75,7 @@ ZONE_OP_CN: dict[str, str] = {
     "reset": "还原此格",
 }
 
-LOCAL_OP_ALLOWED_FIELDS: tuple[str, ...] = ("zone", "op", "amount")
+LOCAL_OP_ALLOWED_FIELDS: tuple[str, ...] = ("zone", "op", "amount", "region")
 LOCAL_OP_DEFAULT_AMOUNT = 0.5
 LOCAL_OP_MAX_AMOUNT = 1.0
 
@@ -90,7 +90,9 @@ def validate_local_ops(ops) -> tuple[bool, str]:
 
     合法形态：单个对象、对象列表、或 None/[]（=没有局部调整）。
     规则（"不许发明"）：
-    - 只允许 zone / op / amount 三个字段，多一个未知字段即拒绝；
+    - 只允许 zone / region / op / amount 四个字段，多一个未知字段即拒绝；
+    - **指哪儿**：`zone`（整数 0~8 的九宫格）**或** `region`（位置词表的键，人话位置，
+      见 kernel\\regions.py）——两者必居其一；`region` 也可以写成 `{"hard": "left"}`；
     - zone：整数 0~8，且不能是布尔（Python 里 True==1，必须显式挡掉）；
     - op：必须是 ZONE_OP_ALLOWED 里的动作；
     - amount：可选（缺省 0.5），数字且落在 [0, 1]。
@@ -114,13 +116,31 @@ def validate_local_ops(ops) -> tuple[bool, str]:
         extra = [k for k in item if k not in LOCAL_OP_ALLOWED_FIELDS]
         if extra:
             return False, f"{where} 含未知字段 {extra}（只允许 {list(LOCAL_OP_ALLOWED_FIELDS)}）"
-        if "zone" not in item:
-            return False, f"{where} 缺 zone（0~{ZONE_COUNT - 1}，行优先：0=左上 … 8=右下）"
-        zone = item["zone"]
-        if isinstance(zone, bool) or not isinstance(zone, int):
-            return False, f"{where} 的 zone 必须是整数 0~{ZONE_COUNT - 1}，收到 {zone!r}"
-        if not 0 <= zone <= ZONE_COUNT - 1:
-            return False, f"{where} 的 zone={zone} 越界（只能是 0~{ZONE_COUNT - 1}）"
+        has_zone = "zone" in item
+        has_region = "region" in item
+        if not has_zone and not has_region:
+            return False, (f"{where} 既没 zone 也没 region（要指哪儿？"
+                           f"zone 是 0~{ZONE_COUNT - 1} 的九宫格；region 是位置词表的键）")
+        if has_zone and has_region:
+            return False, f"{where} 同时给了 zone 和 region（只能给一个：九宫格 或 位置词）"
+        if has_region:
+            # 延迟导入：避免 kernel 顶层出现循环依赖
+            import regions as RG
+            key = item["region"]
+            if isinstance(key, dict):
+                try:
+                    key = RG.coerce(key)
+                except ValueError as e:
+                    return False, f"{where} 的 region {e}"
+            ok_r, err = RG.validate(key)
+            if not ok_r:
+                return False, f"{where} 的 region：{err}"
+        else:
+            zone = item["zone"]
+            if isinstance(zone, bool) or not isinstance(zone, int):
+                return False, f"{where} 的 zone 必须是整数 0~{ZONE_COUNT - 1}，收到 {zone!r}"
+            if not 0 <= zone <= ZONE_COUNT - 1:
+                return False, f"{where} 的 zone={zone} 越界（只能是 0~{ZONE_COUNT - 1}）"
         op = item.get("op")
         if op not in ZONE_OP_ALLOWED:
             return False, f"{where} 的 op={op!r} 不在允许动作 {list(ZONE_OP_ALLOWED)} 里"
@@ -159,42 +179,61 @@ def _explode_ops(ops) -> list[dict]:
 def normalize_local_ops(ops) -> list[dict]:
     """把合法 local_ops 规范成"有序操作列表"（合并同 op 条目），供全量重放。
 
-    - 一格可以是被合并后的多 op 条目里的一个 zone；
-    - 同一条 op 里多格 → 并成一个条目、zone 列表（避免羽化权重重复叠加）；
-    - 同一 op 在不同条目里重复出现 → 合并 zone 并集 + 取 max(amount)。
-    这样"agent 每次重述整份调整"与"界面逐次累积"得到同一份等价结果，可复现。
+    - **九宫格形态**（zone）与老版本逐字一致：同一条 op 里多格 → 并成一个条目 + zones 列表；
+    - **位置词形态**（region，2026-10-13 加）：按 (op, amount, region) 分组，
+      产物是 `{"op":…, "amount":…, "regions":[…]}` 或 `{"op":…, "amount":…, "region":…}`；
+    - 两种形态**不混在一条里**（字段不同），各自成条目 ⇒ 老判据与老账都不受影响。
     """
     flat = _explode_ops(ops)
     ok, err = validate_local_ops(flat)
     if not ok:
         raise ValueError(err)
-    groups: dict[tuple, dict] = {}
-    order: list[tuple] = []
+    keep_region = any(isinstance(i, dict) and "region" in i for i in flat)
+
+    zgroups: dict[tuple, dict] = {}
+    zorder: list[tuple] = []
+    rgroups: dict[tuple, dict] = {}
+    rorder: list[tuple] = []
     for item in flat:
-        zone = int(item["zone"])
         op = str(item["op"])
         amount = float(item.get("amount", LOCAL_OP_DEFAULT_AMOUNT))
+        if "region" in item:
+            import regions as RG
+            key = RG.coerce(item["region"])
+            gkey = (op, round(amount, 6), key)
+            if gkey not in rgroups:
+                rgroups[gkey] = {"op": op, "amount": amount, "region": key}
+                rorder.append(gkey)
+            continue
+        if keep_region:
+            # 九宫格形态与位置词形态**不混流**：真需要混时也各自成条目，语义不相互污染
+            pass
+        zone = int(item["zone"])
         if op == ZONE_RESET_OP:
             continue  # reset 由 merge 阶段消化，不进渲染计划
         key = (op, round(amount, 6))
-        if key not in groups:
-            groups[key] = {"op": op, "amount": amount, "zones": []}
-            order.append(key)
-        if zone not in groups[key]["zones"]:
-            groups[key]["zones"].append(zone)
+        if key not in zgroups:
+            zgroups[key] = {"op": op, "amount": amount, "zones": []}
+            zorder.append(key)
+        if zone not in zgroups[key]["zones"]:
+            zgroups[key]["zones"].append(zone)
     out: list[dict] = []
-    for key in order:
-        g = groups[key]
+    for key in zorder:
+        g = zgroups[key]
         out.append({"op": g["op"], "amount": g["amount"], "zones": sorted(g["zones"])})
+    for key in rorder:
+        g = rgroups[key]
+        out.append({"op": g["op"], "amount": g["amount"], "region": g["region"]})
     return out
 
 
 def merge_local_ops(base_ops, new_ops) -> list[dict]:
-    """累积局部调整：应用 reset（移除该格全部条目）后再并入新条目。
+    """累积局部调整：应用 reset（移除该区全部条目）后再并入新条目。
 
-    这是"还原此格"的实现方式 —— 从累积列表里去掉该格的条目后重放，
+    这是"还原"的实现方式 —— 从累积列表里去掉那条目后重放，
     而不是加一条"反向抵消"（数值不精确且会漂）。
     两种形态（词汇表 / 已归并）都能进出，方便"取出累积 → 并入新动作 → 存回"。
+    ★ region 也能 reset：`{"region": "left", "op": "reset"}`（判据在 test_version_compare / 区域判据里）。
     """
     base = _explode_ops(base_ops)
     new = _explode_ops(new_ops)
@@ -205,8 +244,24 @@ def merge_local_ops(base_ops, new_ops) -> list[dict]:
     if not ok:
         raise ValueError(f"新 local_ops 不合法: {err}")
 
-    resets: set[int] = {int(i["zone"]) for i in new if i.get("op") == ZONE_RESET_OP}
-    kept = [dict(i) for i in base if int(i["zone"]) not in resets]
+    def keyset(items) -> set:
+        """把一个条目压成"它作用在哪些位置上"的键集合（zone 与 region 都算）。"""
+        out = set()
+        for i in items:
+            if not isinstance(i, dict):
+                continue
+            if "zone" in i:
+                out.add(("zone", int(i["zone"])))
+            elif "region" in i:
+                import regions as RG
+                out.add(("region", RG.coerce(i["region"])))
+        return out
+
+    resets: set = set()
+    for i in new:
+        if i.get("op") == ZONE_RESET_OP:
+            resets |= keyset([i])
+    kept = [dict(i) for i in base if not (keyset([i]) & resets)]
     kept += [dict(i) for i in new if i.get("op") != ZONE_RESET_OP]
     return normalize_local_ops(kept)
 

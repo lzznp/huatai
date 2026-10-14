@@ -30,6 +30,10 @@ export function PickImage():Promise<string>;
 
 export function Projects():Promise<main.Reply>;
 
+export function RegionList():Promise<main.Reply>;
+
+export function RegionPreview(arg1:string,arg2:string,arg3:string):Promise<main.Reply>;
+
 export function RenderRun(arg1:string,arg2:string,arg3:string,arg4:string):Promise<main.Reply>;
 
 export function SessionLatest():Promise<main.Reply>;

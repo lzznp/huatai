@@ -163,6 +163,14 @@ def render_order(project: str, order_id: str, *,
         "knobs": report.get("knobs_applied"),
         "local_ops": report.get("local_ops"),
         "metrics": report.get("metrics"),
+        # ---- ★ 版本对比要用的两样（2026-10-13 加）----
+        # png_sha256：界面显示的那张图与账里记的**是不是同一张**，拿它一对便知
+        #             （以前只在 action 行里，history 里没有 ⇒ 界面无从核对）。
+        # zones：9 格指标（每格 mean/dark_pct/light_pct/ink_pct）——界面上的九宫格标签、
+        #        以及要点卡里"哪一格更暗"都要用它。**旧版 history 没有这两项**，
+        #        读的人必须按"可能缺"处理（界面/测试都不许因此炸）。
+        "png_sha256": _sha256(png),
+        "zones": report.get("zones"),
     })
     ST.save_render(project, order_id, history=history, last_report=report,
                    local_ops=ops, created_at=data.get("created_at"))

@@ -42,6 +42,12 @@ except Exception as e:             # noqa: BLE001
     RENDER_MOD = None
     BRAIN_ERR = BRAIN_ERR or f"{type(e).__name__}: {e}"
 
+try:
+    from . import region as REGION_MOD
+except Exception as e:             # noqa: BLE001
+    REGION_MOD = None
+    BRAIN_ERR = BRAIN_ERR or f"{type(e).__name__}: {e}"
+
 SERVICE = "画台·服务"
 VERSION = "0.3.0"
 
@@ -63,6 +69,8 @@ ACTIONS: dict[str, str] = {
     "intent.round": "★ 小助手一轮：要么问（ask）、要么给参数出图（render）；都会落账",
     "render.run": "★ 出图一版：给参数 → 调确定性管线 → 产物落 out\\ + 独立回读 BMP + 落账",
     "order.image": "把某一版产物读成 data URL（payload.project + payload.order，可选 which/ver）",
+    "region.preview": "★ 把某个「位置词」裁出来高亮给界面看（payload.project + payload.order + payload.region）",
+    "region.list": "位置词表总览（每个词的像素范围与占比）——排查用",
     "shutdown": "让常驻进程收工（仅 stdio）",
 }
 
@@ -180,6 +188,22 @@ def handle(action: str, payload: dict | None = None) -> tuple[int, dict]:
             ver = payload.get("ver")
             return 200, ST.order_image(str(pid), str(oid), which,
                                        ver=int(ver) if ver is not None else None)
+
+        if action == "region.preview":
+            if REGION_MOD is None:
+                return 500, {"error": "区域预览那层没接上", "detail": BRAIN_ERR}
+            pid, oid = payload.get("project"), payload.get("order")
+            if not pid or not oid:
+                return 400, {"error": "缺参数", "detail": "需要 project 与 order"}
+            key = payload.get("region")
+            if not key:
+                return 400, {"error": "缺参数", "detail": "需要 region（位置词表的键）"}
+            return 200, REGION_MOD.preview(str(pid), str(oid), str(key))
+
+        if action == "region.list":
+            if REGION_MOD is None:
+                return 500, {"error": "区域那层没接上", "detail": BRAIN_ERR}
+            return 200, {"区域": REGION_MOD.all_previews_meta()}
 
         if action == "render.run":
             if RENDER_MOD is None:

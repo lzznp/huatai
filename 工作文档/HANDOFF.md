@@ -1,5 +1,8 @@
 # 交接包：画台（v0 · 闭环已通）状态
 
+> ⚠️ **新对话请先读 `会话报告-20261014.md`（第二场完整报告）**，再读本文件的【追加】节（在文件末尾）。
+> 本文件上半部分（§0~§6）是**第一场**的交接，保留原文不动。
+
 > 生成时间：2026-10-12 ｜ 交接方式：本对话（参谋长）→ 新对话
 > **新对话开场顺序：本文件 → `00-先读我.md`（接口：形态/判据/坑）→ `决策记录.md`（决策表）→ `待完善.md`（待办清单）→ 再问环境**
 > ⚠️ 先看 §2 的第一条：**活代码在工作区外，需要 full-access**，否则你一动手就会撞墙。
@@ -198,3 +201,143 @@ python tests\smoke_render_loop.py       # ★ 出图闭环三轮
   **要花钱的判据（--with-brain / smoke_*）必须先问我**
 - 一次只做一件事，做完停下来问我一句
 ```
+
+---
+
+# 【追加】2026-10-13/14 会话交接（第二场）
+
+> 下面全部是**追加**，上面那份原文一字未动。本场新增的文档：`会话报告-20261014.md`（本场的完整报告，含原始数字与出处）。
+
+## 1 一句话状态
+
+**用户拍板的核心结论（本场最重要的一句，用户原话精神）**：
+> **"代码容易、生成效果也不错，难的是『精确交互』（改哪儿、改多少）。这一关过了，其他设计类助手就通畅了。"**
+
+本场把"精确交互"拆成两半，各拿到**实锤结论**：
+- **"改哪儿"（范围）**：**不用视觉模型**能做到的，是**位置**（圈选 + 磁性吸附，已验）；**做不到的，是语义**（眉毛/眼睛/嘴唇这类"按名字说"的部位）。原因是**照片里的信号**，不是算法。
+- **"改多少"（力度）**：**试算排可行**（数据见 §4），但用户判断它**不是当务之急**，先解决范围。
+
+工程上：**SDK 已升到最新 0.1.5rc1**（SDK + 运行时同版本），**268 项离线判据 + 42/42 自检全绿**，运行时副本已存 `D:\dsh-sdk`（用户要求，供别的项目用）。
+
+## 2 ★ 本场最大的发现：视觉这条路，卡在"模型没眼睛"
+
+**已实测到底**（不是推断）：
+
+| 环节 | 实测结果 |
+|---|---|
+| 运行时**认**图片块（`{"type":"image","mimeType":…,"data":<base64>}`） | ✅ 认 |
+| 0.1.2rc1 + `sdk-minimal` profile | ✗ 报错 `SDK image prompt requires an attachment store`（该 profile 没挂附件仓库） |
+| **升到 0.1.5rc1 + 完整 `sdk` profile** | ✅ 图片被**真的存下来**（`dsh_home\attachments\v1\objects\fa\fa2387…`，3465 B），调用 `finish=completed` |
+| 让 agent 用 `read_image` 工具读文件 | ✗ **工具直接报错**：`model "deepseek-v4-flash" does not declare image input` |
+| 试 `deepseek-v4-vl` / `deepseek-vl2` | ✗ 服务端没有这两个模型（`finish=error`） |
+
+⇒ **根因只有一个：`deepseek-v4-flash` 是纯文本模型，不声明图像输入。** 链路的其余每一环都通了。
+
+**外部调研（已找到现成方案，不是空白）**：
+- [给 DeepSeek Harness 加一双「眼睛」：全局图片识别插件的完整实现与踩坑实录](https://juejin.cn/post/7673655608423235634)
+  —— 同一痛点，方案：**不换模型，把图片转成文字再藏进上下文**（host 插件调**阿里云百炼 Qwen-VL** → `agent.inject()` 注入隐藏上下文）；文内含 **6 个真实坑的根因与修法**（客户端插件 `$mount` 是异步的、remote 必须 strict codec、位置传参、能力判定默认值方向反了…）。
+- 第三方包 [dsh-vision-mix](https://www.npmjs.com/package/dsh-vision-mix)
+- 官方讨论 [#5267 暴露每个模型的图像输入能力](https://github.com/deepseek-ai/deepseek-harness/discussions/5267)、[#112 接入第三方视觉模型说无法识别图片](https://github.com/deepseek-ai/deepseek-harness/discussions/112)
+
+**用户下一步已定**：**去申请一个 key**（大概率是阿里云百炼），拿到就试视觉。
+
+## 3 用户点名的新任务：研究开源工具 **artcraft**（下一场第一件）
+
+用户原话精神：
+> "我下了这个开源的 **artcraft**，是一个开源的**类似 PS 的工具**，里面也有 AI 交互的部分。我们看看它的源码，看看有无借鉴，或者**人家是不是已经把我们的想法弄好了**。"
+
+**下一场要做**：
+1. 找到并读 artcraft 源码（先问用户**放在哪个目录**；没有的话让他给仓库地址/下载位置）；
+2. 重点看它怎么解决**"精确交互/选区"**：选区数据结构、是否接入分割模型（SAM 类）、点选/框选/画笔、区域与"改多少"怎么绑定、有没有"先给用户看那块再动手"；
+3. 产出：**借鉴清单**（能直接搬的 / 要改的 / 不合适的）+ 与本项目已有能力（`kernel\regions.py`、磁吸吸附、位置确认卡）的对照。
+
+## 4 本场拿到的实测数字（口径 + 出处，全在 `tests\` 下，可重跑）
+
+| 主题 | 数字 | 出处 |
+|---|---|---|
+| **磁性吸附**（改哪儿：位置） | 嘴唇圈选：面积 **1.02×**、**IoU 0.83**、外扩 10%、轮廓梯度 **2.5→12.5**；只圈上唇：面积 0.51×、外扩 2%、梯度 5.9→**22.2** | `exp_circle_snap3.py` |
+| **细长/弱边特征**（眼、眉） | 信号比：左眼 **0.53**、左眉 **0.46**（门槛 0.6）⇒ **系统如实拒绝**，不硬吸 | `exp_circle_snap2.py`、`probe_edge_signal.py` |
+| **眉毛专项探测** | 上半脸找细长暗块 ⇒ 找到的是**眼睛/发丝**，眉毛**一个都没进榜**；以眼为锚在眼上方找最暗横条 ⇒ 找到的是**额头+一缕刘海**（暗度 12.4 / 48.4 灰阶） | `exp_brow_detect.py`、`exp_brow_detect2.py` |
+| **眼睛可被稳定检测** | 两次独立检测锁到同一眼睛位置，**误差 1–2px** | 同上 |
+| **试算排**（改多少） | 4 档候选墨点跨幅 **14.3%~35.7%（21.4 个百分点）**；单张 **88–116ms**（一排 5 张共 476ms）；小图(252px)与全图(787px) 同参数墨点**都 24.6%，差 0.0** | `exp_candidates.py` |
+| **区域改动生效范围** | `region=left` 提亮 ⇒ 左列墨点 **−12.0 个点**、右列 **+0.0** | `test_region_offline.py` 7.3/7.4 |
+| **羽化**（边缘台阶） | 不羽化：边界带内跳 **−14.4%**、带外 **+0.6%**；羽化 20px：带内 **−8.7%**、带外 **+12.3%**（代价：改动会"泄"到圈外） | `exp_region_edit.py` |
+| **一版出图耗时** | 100mm@200dpi（787px）**0.86s**；100mm@300dpi **1.88s**；25mm@200dpi **0.06s** | `probe_speed.py` |
+| **提示词构成** | 总 3833 字符，其中"这一单的真数据" ≈1300 字符 = **33.9%** | `probe_prompt_shape.py` |
+| **真机实验①（把助手钉在格号上）** | 改提示词后：R3"与数据对不上时顶回来" **0/3→3/3**；R4"用户可见文字里无内部动作名" **0/3→3/3**；R2 仍 1/3（因"左边"与数据不符） | `exp_position.py` |
+| **真机实验②（输出预算/推理强度）** | 默认档 **2/6 轮截断作废**（~1.2 万 token、50 秒）；`low`：**0/6 截断**、token 中位 **5995**、耗时中位 **14.1s**；`high`：0/6 截断但 token 中位 **13703**、**53.0s**、落格 0/6。可用取值只有 `low`/`high` | `exp_effort.py` |
+| **真机实验③（措辞决定落格）** | 用户说"**左边**闷" ⇒ 落格 **2/6**；用户**明说格号** ⇒ 落格 **6/6**（同一模型、同一图） | `exp_effort.py` 场景 A/B/C |
+| **用途量** | 本场真机调用 ≈40 次、合计 **≈33.6 万 token**（单价未知，**没折算成钱**） | 各 exp 脚本输出 |
+
+## 5 本场改了哪些代码（未提交，回滚点 = `v0-handoff`）
+
+**内核（`kernel\`，仍是"加法"，老账一字未动）**
+- 新增 `kernel\regions.py`：**位置词表 14 条**（归一化形状 + `rect_px()`/`mask()` 唯一来源；未知键抛错）。
+- `kernel\knobs.py`：局部调整多一条 **`region` 可选路径**（`zone`/`region` 二选一；`region` 也能 `reset`）；`LOCAL_OP_ALLOWED_FIELDS` 加 `region`。
+- `kernel\image_lib\pipeline.py`：`_apply_local_ops` 支持 `region`；`_prepare_local_ops` 支持 `regions` 列表形态。
+- `kernel\agent_bridge.py`：`__init__` 新增**可选** `max_tokens=8192`（原写死）与 `reasoning_effort=None`；默认值与老行为逐字一致。
+
+**服务端（`server\`）**
+- 新增 `server\region.py`：把某个位置词**裁出来高亮**（底图优先最新产物；**不落盘、不记账**）。
+- `server\dispatch.py`：新增动作 `region.preview` / `region.list`。
+- `server\intent.py`：提示词渲染位置词表（与代码同源）；新增"位置没确认前不许给参数""动手前先拿 9 格数字核一遍""message 不许写内部动作名"等纪律；`round_()` 允许**注入替身大脑**（于是"位置确认→出图"这条路**离线可验**）；返回值/账里带上 `region`。
+- `server\brain.py`：`HUATAI_MAX_TOKENS`（默认 **16384**）/ `HUATAI_REASONING_EFFORT`（默认 **low**）；`status()` 多回这两项。
+- `server\render.py`：每版 `history` 追加 **`png_sha256`** 与 **`zones`**（9 格指标，供版本对比与格号）。
+
+**壳与界面（`shell\`）**
+- `shell\app.go`：新增绑定 `RegionPreview` / `RegionList`。
+- `shell\frontend\dist\`：**版本条**（全部版本可选、点两版并排、每版带 sha256/指标）、**大窗口预览**（滚轮缩放/拖动/1:1/←→换版/空格切格号/Esc）、**九宫格叠加**（可开关）、**位置确认卡**（裁剪图 + 「对，就是这块」/「不是这块」）。
+
+**测试（`tests\`，新增 14 个文件）**
+- 判据套：`test_version_compare.py`（**31**）、`test_region_offline.py`（**28**）；`run_offline_all.ps1`（**必须带 BOM**，否则 PS 5.1 按 GBK 读会报语法错）。
+- 真机实验：`exp_position.py`、`exp_effort.py`、`check_image_prompt.py`。
+- 离线探针（只读/隔离，可随时重跑）：`probe_local_bleed.py`（**局部调整外溢 86%**）、`probe_order_image_ver.py`（版本语义）、`probe_prompt_shape.py`、`probe_speed.py`、`probe_edge_signal.py`、`probe_dt_check.py`；实验：`exp_circle_snap{,2,3}.py`、`exp_region_edit.py`、`exp_candidates.py`、`exp_vision_feeds.py`、`exp_vision_probe.py`、`exp_brow_detect{,2}.py`。
+
+## 6 判据现状（本场每次改完都跑）
+
+```
+离线 10 套 = 268 项全绿
+  smoke_kernel(内核在新位置可用) / test_server_api 38 / test_stdio 24 / test_account 37 /
+  test_brain_offline 27 / test_intent_offline 32 / test_render_offline 43 /
+  test_knobs_effect 8 / test_version_compare 31 / test_region_offline 28
+运行\画台.exe --selfcheck = 42/42（免费层）
+```
+（一条命令：`powershell -NoProfile -ExecutionPolicy Bypass -File D:\画台\tests\run_offline_all.ps1`）
+
+## 7 环境现状
+
+| 项 | 读数 |
+|---|---|
+| `deepseek-harness-sdk` / `-runtime-bin` | **0.1.5rc1 / 0.1.5rc1**（本场从 0.1.2rc1 升上来） |
+| 运行时 exe | `…\envs\bestpic\Lib\site-packages\deepseek_harness_runtime\runtime\deepseek-harness-sdk-runtime-win-x64.exe`，**240,529,920 B**，sha `7FF077CFA28B81AA…`，`--version` 报 **0.1.5-rc.1** |
+| 配套 `-rg.exe` | 5,429,760 B，sha `F9DDE63498B3193F`（**新旧两版逐字节相同**） |
+| **副本（用户要的）** | **`D:\dsh-sdk\`**（两个 exe，234.6 MB，sha 与在用的一致） |
+| 其他依赖 | numpy 2.5.3 / Pillow 12.3.0 / pydantic 2.13.5（**升级时一个没动**） |
+| 回滚到升级前 | `python -m pip install --no-deps --force-reinstall deepseek-harness-sdk==0.1.2rc1 deepseek-harness-runtime-bin==0.1.2rc1` |
+| 临时实验品（可删） | `D:\画台\.tmp-tests\venv-sdk015\`、`dsh-check-home*`、`dsh_home_015\` |
+
+## 8 三条"用户给出的设计铁律"（本场总结，下一场别违背）
+
+1. **不许要求用户先学一套符号、或先做一次"元操作"**（点开关、数格子、记编号）。用户否掉九宫格的理由就是"太机械"；14 个中文位置词被否，也是"换皮的格子"。
+   ⇒ 任何"标签/区域"方案都要过这一条：**用户要不要先学东西**。
+2. **范围（改哪儿）优先于力度（改多少）**。用户明说试算排"现在不重要"，因为它属于"数据与 LLM 交互"那一层；**范围不清，力度给什么都白搭**。
+3. **视觉打标签的初衷是"让普通人能按名字说话"**，不是炫技。所以判定标准是：**它能不能让一个不懂工艺的人说出"眉毛太密了"并且改对**。
+
+## 9 下一场的开场建议（可直接复制）
+
+```
+你是本项目的参谋长。工作区 D:\玻璃画和剪纸画\，活代码在 D:\画台\（工作区外，需 full-access）。
+先读：D:\画台\工作文档\会话报告-20261014.md（上一场完整报告）→ 00-先读我.md →
+决策记录.md（决策 #23~#26 是本场新增）→ 待完善.md（§8 是本场新增待办）。
+
+上一场结论：精确交互 = 范围 + 力度；范围里"位置"已能用（圈选+磁吸，IoU 0.83），
+"语义部位"（眉毛等）在没有视觉模型时**做不到**（已实测：模型 deepseek-v4-flash 不支持图像输入）。
+用户已把 SDK 升到 0.1.5rc1，运行时副本在 D:\dsh-sdk\。
+
+本场第一件：研究用户下载的开源工具 **artcraft**（类 PS + AI 交互）源码，
+看它怎么解决"精确选区/交互"，能否借鉴（或已经实现了我们的想法）。
+第二件：等用户的视觉 key（阿里云百炼），到了就试视觉注入。
+边界同上一场：动代码先对齐；数字标口径与出处；要花钱的判据先问；
+一次只做一件事，做完停下问一句。
+```
+

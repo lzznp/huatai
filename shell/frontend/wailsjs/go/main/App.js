@@ -58,6 +58,14 @@ export function Projects() {
   return window['go']['main']['App']['Projects']();
 }
 
+export function RegionList() {
+  return window['go']['main']['App']['RegionList']();
+}
+
+export function RegionPreview(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RegionPreview'](arg1, arg2, arg3);
+}
+
 export function RenderRun(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['RenderRun'](arg1, arg2, arg3, arg4);
 }

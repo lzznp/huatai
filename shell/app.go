@@ -126,6 +126,20 @@ func (a *App) OrderImage(project string, order string, which string, ver int) Re
 	return a.k.Call("order.image", p, 60*time.Second)
 }
 
+// RegionPreview ★ 把某个「位置词」裁出来高亮（2026-10-13）：
+// 小助手说"左边一列"，界面就把那一块裁出来给用户看，**认了才动手**。
+// 壳同样只搬字节：裁剪与高亮都在 Python 侧做，这里只转发。
+func (a *App) RegionPreview(project string, order string, region string) Reply {
+	return a.k.Call("region.preview", map[string]any{
+		"project": project, "order": order, "region": region,
+	}, 60*time.Second)
+}
+
+// RegionList 位置词表总览（排查用：每个词的像素范围与占比）。
+func (a *App) RegionList() Reply {
+	return a.k.Call("region.list", nil, 30*time.Second)
+}
+
 // RenderRun 手动出一版（★ 界面平时靠"小助手一轮"自动出；这个是给自检和排查用的）。
 func (a *App) RenderRun(project string, order string, knobsJSON string, localJSON string) Reply {
 	p := map[string]any{"project": project, "order": order}

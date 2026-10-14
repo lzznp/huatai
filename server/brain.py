@@ -36,6 +36,18 @@ from agent_bridge import AgentBridge, AgentReply  # noqa: E402
 
 DEFAULT_MODEL = os.environ.get("HUATAI_MODEL", "deepseek-v4-flash")
 DEFAULT_PROFILE = os.environ.get("HUATAI_PROFILE", "sdk-minimal")
+# ★ 2026-10-13：输出预算与推理预算。默认值**按实测调过**（见 tests\exp_effort.py）：
+#   HUATAI_REASONING_EFFORT 默认 "low"：
+#     - 默认（不设）时，带位置的局部调整那一轮会顶到 max_tokens ⇒ finish_reason=max-tokens
+#       ⇒ 整轮作废（回 {}），一次烧掉 ~1.2 万 token、等 50 秒。实测 2/6 作废。
+#     - low：0/6 作废，关键轮 token 中位 5995（默认 ~8.5k~11.4k），耗时中位 14.1s（默认 ~30–50s）。
+#     - 代价：它"顶回来"的倾向弱一点。要它每轮都先核对、不介意 2.3 倍 token 与 3.8 倍耗时，
+#       就把 HUATAI_REASONING_EFFORT 设成 "high"（实测 0/6 落格、每次都对）。
+#     - 服务端只接受 low / high；none / medium / minimal 会被拒（拒绝是免费的，0 token）。
+#   HUATAI_MAX_TOKENS 默认 16384（原 8192）：光加预算治不了截断（high 档 16384 单轮仍烧到 17679），
+#     但它给推理留余量。想回到老行为就设 HUATAI_MAX_TOKENS=8192。
+DEFAULT_MAX_TOKENS = int(os.environ.get("HUATAI_MAX_TOKENS", "16384"))
+DEFAULT_REASONING_EFFORT = os.environ.get("HUATAI_REASONING_EFFORT", "low") or None
 
 # 4a 只读探测用的最小问题：只要求一个 JSON，别的都不要。
 PROBE_PROMPT = (
@@ -77,9 +89,13 @@ class Brain:
     """和运行态 agent 说话的桥。**懒启动**（第一次用才拉运行时）+ 串行（一次一回合）。"""
 
     def __init__(self, *, model: str = DEFAULT_MODEL, profile: str = DEFAULT_PROFILE,
-                 dsh_home: str | Path | None = None, cwd: str | Path | None = None) -> None:
+                 dsh_home: str | Path | None = None, cwd: str | Path | None = None,
+                 max_tokens: int | None = None,
+                 reasoning_effort: str | None = DEFAULT_REASONING_EFFORT) -> None:
         self.model = model
         self.profile = profile
+        self.max_tokens = int(max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS)
+        self.reasoning_effort = reasoning_effort
         self.dsh_home = Path(dsh_home) if dsh_home else ROOT / ".dsh_home"
         # cwd 收窄：一个空目录。agent 看得见的东西越少，越不容易跑偏。
         self.cwd = Path(cwd) if cwd else ROOT / ".agent-cwd"
@@ -98,6 +114,8 @@ class Brain:
                 profile=self.profile,
                 dsh_home=self.dsh_home,
                 workspace=self.cwd,
+                max_tokens=self.max_tokens,
+                reasoning_effort=self.reasoning_effort,
             )
             self.started_at = datetime.now().isoformat(timespec="seconds")
         return self._bridge
@@ -115,6 +133,8 @@ class Brain:
             "运行时已起": self._bridge is not None,
             "model": self.model,
             "profile": self.profile,
+            "max_tokens": self.max_tokens,
+            "reasoning_effort": self.reasoning_effort,
             "dsh_home": str(self.dsh_home),
             "cwd": str(self.cwd),
             "密钥就位": bool(os.environ.get("DEEPSEEK_API_KEY", "").strip()),

@@ -18,6 +18,13 @@ let currentOrder = null;
 let orders = [];
 let busy = false;
 
+// ---- 出图预览的状态（2026-10-13 加：版本对比 / 九宫格 / 放大窗）----
+let versions = [];        // 这一单的版本列表（来自账 history[]）
+let images = {};          // ver -> {data_url, sha, name} 或 {err}
+let cmp = [];             // 当前选中的版本（1 个=单张，2 个=并排；顺序=点的顺序）
+let gridOn = false;       // 图上是否画 9 格格号
+const zState = { ver: 0, list: [], scale: 0, x: 0, y: 0, natW: 1, natH: 1 };
+
 // ---------------------------------------------------------------- 错误条
 function showErr(reply, what) {
   const bar = $('errBar');
@@ -152,6 +159,10 @@ async function openOrder(oid) {
 
 async function refreshOrder() {
   const box = $('chat');
+  cmp = [];                    // 换单 ⇒ 重新选版本（默认回到"看最新"）
+  versions = [];
+  regionPreviewCache = {};
+  closeZoom();
   $('preview').classList.add('hidden');       // 先藏，等确认有产物再显示
   if (!currentOrder) {
     box.innerHTML = currentProject
@@ -169,23 +180,378 @@ async function refreshOrder() {
 }
 
 // ★ 出图之后，最新一版要在这儿看得见（图 + 指标 + 上机档名）
+//
+// 2026-10-13 改（用户点名 ①②）：
+//   ① 两次出图都要能看见、方便对比 ⇒ **版本条**：每版一个钮，点两版就并排（顺序=点的顺序）
+//   ② 大窗口预览 ⇒ 点「放大」进放大窗：滚轮缩放、拖动平移、1:1、上一版/下一版
+//   ＋ 九宫格标签：图上画 0~8 的格号（可开关）——用户说"第 4 格"，小助手读的是同一格
+//
+// 两条老规矩不变：
+//   · 界面**不自己编数**：格号、指标、sha 全来自账（`history[]` 与 order.image 的回执）
+//   · 缺数据**不许炸**：加这两项之前出的版本没有 zones/png_sha256，缺就写"无"
+
+const ZONE_NOTE = '格号：0 左上 ・ 1 上中 ・ 2 右上 ・ 3 左中 ・ 4 正中 ・ 5 右中 ・ 6 左下 ・ 7 下中 ・ 8 右下';
+
 async function refreshPreview(ord) {
-  if (!(ord.n_ver > 0)) return;
-  const r = await window.go.main.App.OrderImage(currentProject.id, currentOrder, 'png', 0);
-  if (!r.ok) return;
-  const res = r.result || {};
-  const rep = ord.last_report || {};
-  const m = rep.metrics || {};
-  const rb = rep.bmp ? String(rep.bmp).split('\\').pop() : '';
-  $('previewImg').src = res.data_url;
-  $('previewCap').textContent =
-    `第 ${res.版本} 版　${(rep.pixels || []).join('×')}px @${rep.dpi}dpi\n` +
-    `暗部 ${m.dark_pct}% ・ 亮部 ${m.light_pct}% ・ 墨点 ${m.ink_pct}%\n` +
-    `上机档：${rb}\n图 sha256 ${String(res.sha256).slice(0, 16)}…（与账里记的是同一张）`;
+  images = {};
+  versions = (ord.history || []).map((h) => ({
+    ver: h.ver,
+    name: h.img ? String(h.img).split(/[\\/]/).pop() : '',
+    sha: h.png_sha256 || '',            // 加这一项之前出的版本没有 ⇒ 空串，显示"无"
+    zones: h.zones || null,             // 同上
+    metrics: h.metrics || {},
+    knobs: h.knobs || {},
+    local: h.local_ops || [],
+    note: h.note || '',
+  })).filter((v) => v.ver > 0);
+  if (!versions.length) { $('preview').classList.add('hidden'); return; }
+  if (!cmp.length) cmp = [versions[versions.length - 1].ver];   // 默认看最新那一版（旧行为不变）
   $('preview').classList.remove('hidden');
+  renderBar();
+  await renderPanes();
 }
 
+function renderBar() {
+  const bar = $('pvBar');
+  bar.innerHTML = '';
+  const cmpOn = cmp.length === 2;
+  if (versions.length > 1) {
+    const hint = document.createElement('span');
+    hint.className = 'pv-hint';
+    hint.textContent = cmpOn ? '并排：' : (versions.length > 1 ? '点两版并排 →' : '');
+    if (!cmpOn) bar.appendChild(hint);
+  }
+  for (const v of versions) {
+    const i = cmp.indexOf(v.ver);
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'vchip' + (i >= 0 ? ' on' : '') + (i === 0 ? ' left' : '') + (i === 1 ? ' right' : '');
+    const z = (v.zones && v.zones[4]) || {};
+    b.innerHTML = `<span class="vv">v${v.ver}</span>` +
+      `<span class="vm">墨点 ${v.metrics.ink_pct != null ? v.metrics.ink_pct : '?'}%</span>` +
+      `<span class="vm">暗部 ${v.metrics.dark_pct != null ? v.metrics.dark_pct : '?'}%</span>` +
+      (v.sha ? `<span class="vs" title="与账里记的同一张（png sha256）">${escapeHtml(v.sha.slice(0, 8))}</span>` : '<span class="vs">无 sha</span>');
+    b.title = `第 ${v.ver} 版${v.note ? '｜' + v.note : ''}｜正中格墨点 ${z.ink_pct != null ? z.ink_pct : '?'}%`;
+    b.addEventListener('click', () => toggleVer(v.ver));
+    bar.appendChild(b);
+  }
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.className = 'mini';
+  reset.textContent = '看最新';
+  reset.title = '回到"只看最新一版"';
+  reset.addEventListener('click', () => { cmp = [versions[versions.length - 1].ver]; renderBar(); renderPanes(); });
+  bar.appendChild(reset);
+}
+
+function toggleVer(ver) {
+  const i = cmp.indexOf(ver);
+  if (i >= 0 && cmp.length > 1) cmp.splice(i, 1);          // 再点一次取消
+  else if (i < 0) cmp = cmp.length >= 2 ? [cmp[1], ver] : [...cmp, ver];   // 只留两版
+  renderBar();
+  renderPanes();
+}
+
+async function loadVersion(ver) {
+  if (images[ver]) return images[ver];
+  images[ver] = { pending: true };
+  try {
+    const r = await window.go.main.App.OrderImage(currentProject.id, currentOrder, 'png', ver);
+    images[ver] = r && r.ok
+      ? { data_url: (r.result || {}).data_url, sha: (r.result || {}).sha256, name: (r.result || {}).名字 }
+      // ★ 取图失败**不许静默**：以前这里直接 return，界面上什么都不会说
+      : { err: (r && (r.error || r.detail)) || '取图失败' };
+  } catch (e) {
+    images[ver] = { err: String(e) };
+  }
+  return images[ver];
+}
+
+async function renderPanes() {
+  const box = $('pvPanes');
+  box.innerHTML = '';
+  const list = cmp.length ? [...cmp] : [versions[versions.length - 1].ver];
+  box.classList.toggle('many', list.length > 1);
+  for (const ver of list) {
+    const v = versions.find((x) => x.ver === ver);
+    if (!v) continue;
+    const pane = document.createElement('div');
+    pane.className = 'pane';
+    pane.innerHTML =
+      `<div class="pane-head"><span class="pane-ver">第 ${v.ver} 版</span>` +
+      `<span class="note">${v.name ? escapeHtml(v.name) : ''}</span></div>` +
+      `<div class="pane-img"><div class="ph note">取图中…</div></div>` +
+      `<div class="pane-cap note"></div>`;
+    const cap = pane.querySelector('.pane-cap');
+    cap.textContent =
+      `${(v.metrics && v.metrics.ink_pct != null) ? '墨点 ' + v.metrics.ink_pct + '%' : '墨点 ?'}` +
+      ` ・ 暗部 ${v.metrics.dark_pct != null ? v.metrics.dark_pct : '?'}%` +
+      ` ・ 亮部 ${v.metrics.light_pct != null ? v.metrics.light_pct : '?'}%\n` +
+      `${v.knobs && Object.keys(v.knobs).length ? '旋钮 ' + Object.entries(v.knobs).filter(([, x]) => x).map(([k, x]) => k + '=' + x).join('、') : '旋钮 全默认'}` +
+      `${v.local && v.local.length ? '｜局部 ' + JSON.stringify(v.local) : ''}\n` +
+      `png sha256 ${v.sha ? v.sha.slice(0, 16) + '…' : '账里没记（加这功能之前出的版本）'}`;
+    cap.title = v.sha ? '完整 sha256：' + v.sha : '账里没记这一版的 png sha256';
+    box.appendChild(pane);
+
+    const slot = pane.querySelector('.pane-img');
+    const im = await loadVersion(ver);
+    slot.innerHTML = '';
+    if (im.err) {
+      const e = document.createElement('div');
+      e.className = 'pane-err';
+      e.textContent = '这一版取不到图：' + im.err;
+      slot.appendChild(e);
+      continue;
+    }
+    const img = document.createElement('img');
+    img.src = im.data_url;
+    img.alt = `第 ${v.ver} 版预览`;
+    img.title = '点一下放大看（滚轮缩放 / 拖动平移）';
+    img.addEventListener('click', () => openZoom(ver, false));
+    slot.appendChild(img);
+    if (gridOn) slot.appendChild(buildGrid());
+  }
+  $('pvMeta').textContent = gridOn ? ZONE_NOTE : '';
+}
+
+function buildGrid(scale) {
+  const g = document.createElement('div');
+  g.className = 'grid-layer';
+  const k = scale && scale > 0 ? 1 / scale : 1;
+  g.dataset.k = String(k);
+  for (let i = 0; i < 9; i++) {
+    const c = document.createElement('div');
+    c.className = 'gcell';
+    const num = document.createElement('span');
+    num.className = 'gnum';
+    num.style.transform = `scale(${k})`;
+    num.style.transformOrigin = 'left top';
+    num.textContent = String(i);
+    c.appendChild(num);
+    g.appendChild(c);
+  }
+  return g;
+}
+
+function fillZoomGrid() {
+  const box = $('zoomGrid');
+  box.innerHTML = '';
+  if (!gridOn) return;
+  box.style.width = zState.natW + 'px';
+  box.style.height = zState.natH + 'px';
+  box.appendChild(buildGrid(zState.scale));
+}
+
+// ---------------------------------------------------------------- 放大窗口
+function openZoom(ver, grid) {
+  const list = cmp.length ? [...cmp] : [versions[versions.length - 1].ver];
+  zState.ver = ver;
+  zState.list = list;
+  zState.scale = 0;
+  zState.x = 0;
+  zState.y = 0;
+  if (grid !== undefined) gridOn = grid;
+  $('zoom').classList.remove('hidden');
+  showZoom();
+}
+
+async function showZoom() {
+  const v = versions.find((x) => x.ver === zState.ver);
+  $('zoomTitle').textContent = v ? `第 ${v.ver} 版${v.name ? '　' + v.name : ''}` : '放大看';
+  $('zoomCap').textContent = v
+    ? `墨点 ${v.metrics.ink_pct != null ? v.metrics.ink_pct : '?'}% ・ 暗部 ${v.metrics.dark_pct != null ? v.metrics.dark_pct : '?'}% ・ 亮部 ${v.metrics.light_pct != null ? v.metrics.light_pct : '?'}%\n` +
+      `png sha256 ${v.sha || '账里没记'}\n滚轮缩放 ・ 拖动平移 ・ 空格切格号 ・ ←/→ 换版本 ・ Esc 关闭`
+    : '';
+  $('zoomGrid').classList.toggle('hidden', !gridOn);
+  const im = await loadVersion(zState.ver);
+  const img = $('zoomImg');
+  if (im.err) {
+    img.removeAttribute('src');
+    $('zoomCap').textContent = '这一版取不到图：' + im.err;
+    return;
+  }
+  if (img.src !== im.data_url) img.src = im.data_url;
+  const apply = () => {
+    zState.natW = img.naturalWidth || 1;
+    zState.natH = img.naturalHeight || 1;
+    if (!zState.scale) fitZoom();
+    else applyZoom();
+  };
+  if (img.complete && img.naturalWidth) apply();
+  else img.onload = apply;
+}
+
+function fitZoom() {
+  const stage = $('zoomStage');
+  const pad = 34;
+  zState.scale = Math.min((stage.clientWidth - pad) / zState.natW, (stage.clientHeight - pad) / zState.natH, 1);
+  zState.x = 0; zState.y = 0;
+  applyZoom();
+}
+
+function clampPan() {
+  const stage = $('zoomStage');
+  const halfW = Math.max(0, (zState.natW * zState.scale - stage.clientWidth) / 2);
+  const halfH = Math.max(0, (zState.natH * zState.scale - stage.clientHeight) / 2);
+  zState.x = Math.max(-halfW, Math.min(halfW, zState.x));
+  zState.y = Math.max(-halfH, Math.min(halfH, zState.y));
+}
+
+function applyZoom() {
+  clampPan();
+  $('zoomInner').style.transform =
+    `translate(-50%, -50%) translate(${zState.x}px, ${zState.y}px) scale(${zState.scale})`;
+  $('zoomPct').textContent = Math.round(zState.scale * 100) + '%';
+  // 格号要反向缩放才不被一起放大；比例变了才重建（拖动平移时不重建）
+  if (gridOn) {
+    const cur = $('zoomGrid').querySelector('.grid-layer');
+    const want = zState.scale > 0 ? 1 / zState.scale : 1;
+    if (!cur || Math.abs((parseFloat(cur.dataset.k) || 1) - want) > want * 0.01) fillZoomGrid();
+  }
+}
+
+function zoomStep(mult, cx, cy) {
+  const stage = $('zoomStage');
+  const rect = stage.getBoundingClientRect();
+  const mx = (cx == null ? rect.width / 2 : cx - rect.left) - rect.width / 2;
+  const my = (cy == null ? rect.height / 2 : cy - rect.top) - rect.height / 2;
+  const old = zState.scale;
+  const next = Math.max(0.15, Math.min(8, old * mult));
+  if (next === old) return;
+  zState.x = mx - (mx - zState.x) * (next / old);
+  zState.y = my - (my - zState.y) * (next / old);
+  zState.scale = next;
+  applyZoom();
+}
+
+function closeZoom() {
+  $('zoom').classList.add('hidden');
+}
+
+function zoomStepVer(d) {
+  if (zState.list.length < 2) return;
+  const i = zState.list.indexOf(zState.ver);
+  zState.ver = zState.list[(i + d + zState.list.length) % zState.list.length];
+  zState.scale = 0; zState.x = 0; zState.y = 0;
+  showZoom();
+}
+
+
 const KIND_LABEL = { material: '料', user: '你', assistant: '小助手', action: '动作', system: '系统' };
+
+// ★ 位置确认卡（2026-10-13）：小助手说"我理解的是左边一列" ⇒ 把那一块裁出来给它看，认了才动手。
+//   为什么不画九宫格格号：用户明确否掉了（"太机械了"）。他只看这一块像不像。
+let regionPreviewCache = {};
+
+async function previewRegion(key) {
+  if (regionPreviewCache[key]) return regionPreviewCache[key];
+  regionPreviewCache[key] = { pending: true };
+  try {
+    const r = await window.go.main.App.RegionPreview(currentProject.id, currentOrder, key);
+    regionPreviewCache[key] = r && r.ok
+      ? { data_url: (r.result || {}).data_url, label: (r.result || {}).名字, pct: (r.result || {})['区域占全图'], base: (r.result || {}).底图 }
+      : { err: (r && (r.error || r.detail)) || '取不到区域预览' };
+  } catch (e) {
+    regionPreviewCache[key] = { err: String(e) };
+  }
+  return regionPreviewCache[key];
+}
+
+function buildRegionCard(key, labelHint) {
+  const card = document.createElement('div');
+  card.className = 'region-card';
+  const head = document.createElement('div');
+  head.className = 'rc-head';
+  head.textContent = '它理解的位置（红线框住的那块）';
+  const ph = document.createElement('div');
+  ph.className = 'rc-ph note';
+  ph.textContent = '正在裁那一块…';
+  card.appendChild(head);
+  card.appendChild(ph);
+  const acts = document.createElement('div');
+  acts.className = 'rc-acts';
+  card.appendChild(acts);
+
+  previewRegion(key).then((pv) => {
+    ph.remove();
+    if (pv.err) {
+      const e = document.createElement('div');
+      e.className = 'rc-err';
+      e.textContent = '区域预览取不到：' + pv.err;
+      card.insertBefore(e, acts);
+      return;
+    }
+    const img = document.createElement('img');
+    img.className = 'rc-img';
+    img.src = pv.data_url;
+    img.alt = `位置预览：${pv.label}`;
+    img.title = '点一下放大看';
+    img.addEventListener('click', () => openZoomForRegion(pv));
+    card.insertBefore(img, acts);
+    const meta = document.createElement('div');
+    meta.className = 'note rc-meta';
+    meta.textContent = `它说的是「${pv.label || labelHint || key}」　占全图 ${pv.pct != null ? pv.pct + '%' : '?'}　底图：${pv.base || '?'}`;
+    card.insertBefore(meta, acts);
+
+    const yes = document.createElement('button');
+    yes.type = 'button'; yes.className = 'mini primary'; yes.textContent = '对，就是这块';
+    yes.addEventListener('click', async () => {
+      yes.disabled = true; yes.textContent = '好，我让它继续…';
+      await confirmRegion(pv.label || labelHint || key);
+    });
+    const no = document.createElement('button');
+    no.type = 'button'; no.className = 'mini'; no.textContent = '不是这块';
+    no.addEventListener('click', () => {
+      $('say').value = '不是这块，我想改的是：';
+      $('say').focus();
+      autogrow();
+    });
+    acts.appendChild(yes);
+    acts.appendChild(no);
+  });
+  return card;
+}
+
+async function confirmRegion(label) {
+  if (!currentOrder || busy) return;
+  busy = true;
+  thinking(true);
+  const box = $('chat');
+  const msg = `确认：就是「${label}」这块。请按这块继续。`;
+  box.insertAdjacentHTML('beforeend',
+    `<div class="msg user"><div class="who">你</div><div class="txt">${escapeHtml(msg)}</div></div>`);
+  box.scrollTop = box.scrollHeight;
+  try {
+    const r = await window.go.main.App.IntentRound(currentProject.id, currentOrder, msg);
+    if (!r.ok) showErr(r, '确认位置');
+  } catch (e) {
+    showErr({ error: '调 IntentRound 抛异常', detail: String(e) }, '确认位置');
+  } finally {
+    busy = false;
+    thinking(false);
+    await refreshOrder();
+    updateComposer();
+  }
+}
+
+// 区域预览图放大：直接复用放大窗（它本来就是显示一张图 + 缩放平移）
+function openZoomForRegion(pv) {
+  $('zoomTitle').textContent = '位置预览：' + (pv.label || '');
+  $('zoomCap').textContent = `占全图 ${pv.pct != null ? pv.pct + '%' : '?'}　底图：${pv.base || '?'}\n` +
+    `（这张只是给你核对位置的，不进账）\n滚轮缩放 ・ 拖动平移 ・ Esc 关闭`;
+  $('zoomGrid').classList.add('hidden');
+  zState.list = [];
+  zState.scale = 0; zState.x = 0; zState.y = 0;
+  $('zoom').classList.remove('hidden');
+  const img = $('zoomImg');
+  img.src = pv.data_url;
+  const apply = () => {
+    zState.natW = img.naturalWidth || 1;
+    zState.natH = img.naturalHeight || 1;
+    if (!zState.scale) fitZoom(); else applyZoom();
+  };
+  if (img.complete && img.naturalWidth) apply(); else img.onload = apply;
+}
 
 function renderChat(entries, badLines) {
   const box = $('chat');
@@ -210,6 +576,10 @@ function renderChat(entries, badLines) {
     box.insertAdjacentHTML('beforeend',
       `<div class="msg ${kind}"><div class="who">${KIND_LABEL[kind]}</div>
        <div class="txt">${escapeHtml(e.text)}</div>${extra}</div>`);
+    // ★ 它这一轮说了"我理解的位置是 xxx" ⇒ 在气泡下面挂一张裁剪图 + 确认按钮
+    if (kind === 'assistant' && data.region) {
+      box.appendChild(buildRegionCard(data.region, e.text));
+    }
   }
   box.scrollTop = box.scrollHeight;
 }
@@ -313,6 +683,66 @@ window.addEventListener('DOMContentLoaded', async () => {
   $('newName').addEventListener('keydown', (e) => { if (e.key === 'Enter') createProject(); });
   $('btnFeed').addEventListener('click', feed);
   $('btnSay').addEventListener('click', say);
+
+  // ---- 预览：放大 / 格号 / 单张 ----
+  $('btnGrid').addEventListener('click', () => {
+    gridOn = !gridOn;
+    $('btnGrid').classList.toggle('on', gridOn);
+    $('zoomGrid').classList.toggle('hidden', !gridOn);
+    renderPanes();
+  });
+  $('btnView').addEventListener('click', () => openZoom((cmp.length ? cmp[cmp.length - 1] : versions[versions.length - 1].ver), undefined));
+  $('btnOne').addEventListener('click', () => {
+    cmp = [versions[versions.length - 1].ver];
+    renderBar();
+    renderPanes();
+  });
+
+  // ---- 放大窗口 ----
+  $('btnZoomClose').addEventListener('click', closeZoom);
+  $('btnZoomIn').addEventListener('click', () => zoomStep(1.25));
+  $('btnZoomOut').addEventListener('click', () => zoomStep(0.8));
+  $('btnZoomFit').addEventListener('click', fitZoom);
+  $('btnZoomOne').addEventListener('click', () => { zState.scale = 1; zState.x = 0; zState.y = 0; applyZoom(); });
+  $('btnZoomGrid').addEventListener('click', () => {
+    gridOn = !gridOn;
+    $('btnGrid').classList.toggle('on', gridOn);
+    $('zoomGrid').classList.toggle('hidden', !gridOn);
+    $('zoomGrid').innerHTML = gridOn ? buildGrid().innerHTML : '';
+    renderPanes();
+  });
+  $('btnZoomPrev').addEventListener('click', () => zoomStepVer(-1));
+  $('btnZoomNext').addEventListener('click', () => zoomStepVer(1));
+  $('zoomStage').addEventListener('wheel', (e) => {
+    e.preventDefault();
+    zoomStep(e.deltaY < 0 ? 1.15 : 0.87, e.clientX, e.clientY);
+  }, { passive: false });
+  (function dragPan() {
+    const stage = $('zoomStage');
+    let on = false, sx = 0, sy = 0, ox = 0, oy = 0;
+    stage.addEventListener('mousedown', (e) => {
+      if ($('zoom').classList.contains('hidden')) return;
+      on = true; sx = e.clientX; sy = e.clientY; ox = zState.x; oy = zState.y;
+      stage.classList.add('dragging');
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!on) return;
+      zState.x = ox + (e.clientX - sx);
+      zState.y = oy + (e.clientY - sy);
+      applyZoom();
+    });
+    window.addEventListener('mouseup', () => { on = false; stage.classList.remove('dragging'); });
+  })();
+  window.addEventListener('keydown', (e) => {
+    if ($('zoom').classList.contains('hidden')) return;
+    if (e.key === 'Escape') closeZoom();
+    else if (e.key === ' ') { e.preventDefault(); $('btnZoomGrid').click(); }
+    else if (e.key === 'ArrowLeft') zoomStepVer(-1);
+    else if (e.key === 'ArrowRight') zoomStepVer(1);
+    else if (e.key === '+' || e.key === '=') zoomStep(1.25);
+    else if (e.key === '-') zoomStep(0.8);
+  });
   $('say').addEventListener('input', autogrow);
   $('say').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); say(); }   // Enter 发送
