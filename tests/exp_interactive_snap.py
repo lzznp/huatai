@@ -64,24 +64,37 @@ SPARSE_NEIGHBORHOOD = 3.0
 # 一、纯计算（不碰界面，方便单独测）
 # ============================================================
 
-def fs_dither(gray: np.ndarray) -> np.ndarray:
+def fs_dither(gray: np.ndarray, seed: np.ndarray | None = None) -> np.ndarray:
     """Floyd–Steinberg 仿色，返回 bool 点阵（True = 黑点 = 要雕）。
 
     ★ 口径与 kernel\\image_lib\\pipeline.py 的 `_fs_dither` 逐字一致
       （阈值 127.5、误差扩散 7/16·3/16·5/16·1/16，纯确定性无随机）。
     这里返回 bool 而不是 {0,255}，纯粹是试验台内部方便。
+
+    `seed`（2026-10-17 追加，默认 None = 老行为，逐字不变）：
+      给"已知的**点阵决策**"用。用途见 exp_smart_brush2.py 的"只对包围框重仿色"：
+      误差 = 灰度 − 决策，所以**只把灰度喂对不够，还要把决策喂对**，
+      否则子矩形左上角处的起始误差与全图不一致，整块结果都会跟着跑偏
+      （实测：只对齐灰度时，框内与全图差 10426 点；把引子区的决策也喂对之后为 0）。
+      调用方要保证 seed 的 True 位置与灰度是自洽的（同一套仿色口径下算出来的）。
     """
     h, w = gray.shape
     rows = gray.astype(np.float64).tolist()
     out = np.zeros((h, w), dtype=bool)
     c7, c3, c5, c1 = 7 / 16, 3 / 16, 5 / 16, 1 / 16
+    fixed = None
+    if seed is not None:
+        fixed = np.asarray(seed, dtype=bool)
+        if fixed.shape != (h, w):
+            raise ValueError(f"seed 形状 {fixed.shape} 与灰度 {gray.shape} 不一致")
     for y in range(h):
         row = rows[y]
         nxt = rows[y + 1] if y + 1 < h else None
         outrow = out[y]
+        frow = fixed[y] if fixed is not None else None
         for x in range(w):
             old = row[x]
-            is_white = old >= DITHER_WHITE_AT
+            is_white = (not frow[x]) if frow is not None else (old >= DITHER_WHITE_AT)
             outrow[x] = not is_white          # 白点=False，黑点=True
             err = old - (255.0 if is_white else 0.0)
             if x + 1 < w:
