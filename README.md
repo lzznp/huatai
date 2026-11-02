@@ -1,65 +1,71 @@
-# 画台（huatai）
+# 画台
 
-用**自然语言对话**把"玻璃激光雕刻画 / 剪纸画"的口头需求，变成**确定性**的参数与出图产物。
+画台是面向玻璃激光雕刻图和剪纸图的本地图像处理工具。用户通过对话描述效果，程序将要求转换为处理参数，生成预览和导出文件，并保存工程记录。
 
-> 三个角色（2026-10-12 用户拍板）：
-> **用户** 主要跟"小助手"对话干活；**小助手** 就是本项目的产品（被观察的对象）；
-> **参谋长** 是 DSH 里的那个对话 —— 建小助手、写代码、定判据，不替小助手干活。
+## 项目结构
 
-## 三层结构
+桌面界面使用 Go + Wails，Python 服务负责业务处理，图像内核负责按参数出图。桌面端默认通过 stdio 与 Python 子进程交换 JSON；HTTP 接口用于独立调试。
 
-| 层 | 目录 | 是什么 |
-|---|---|---|
-| 壳 | `shell/` | Wails 应用（Go + 前端；前端不用 npm，`dist` 直接 `go:embed`） |
-| 服务 | `server/` | Python 服务（纯标准库 HTTP，**唯一写入口**）：`app.py` / `brain.py` / `capabilities.py` / `dispatch.py` / `intent.py` / `render.py` / `store.py` |
-| 内核 | `kernel/` | 确定性图像内核：`image_lib/pipeline.py` / `knobs.py` / `orders.py` / `controller.py` / `region_canvas.py` / `regions.py` / `agent_bridge.py` / `规则手册.md` |
-| 测试 | `tests/` | 离线测试与实验脚本（smoke / 探针 / 出图判据） |
-| 文档 | `工作文档/` | ★ 项目记忆，入口是 [`工作文档/00-先读我.md`](工作文档/00-先读我.md)（接口文档） |
-| 运行 | `运行/` | `画台.exe`（**不入库**，双击这个跑） |
+| 路径 | 内容 |
+|---|---|
+| `shell/` | Wails 桌面应用，前端资源从 `frontend/dist/` 嵌入 |
+| `server/` | 对话、意图解析、出图调度与工程存储 |
+| `kernel/` | 图像处理流水线、参数、区域编辑和模型接口 |
+| `tests/` | 离线测试、接口测试与出图实验 |
+| `工作文档/` | 接口说明、设计决策与开发记录 |
+| `settings.json` | 本地解释器配置 |
 
-## 怎么跑
+各工艺的支持范围见 [server/capabilities.py](server/capabilities.py)，图像处理约定见[内核规则手册](kernel/规则手册.md)。
+
+## 配置与启动
+
+目前的桌面开发环境为 Windows。构建需要 Go、Wails 和 WebView2；Python 环境主要使用 NumPy、Pillow、python-dotenv 和 deepseek-harness-sdk。
+
+先在 [settings.json](settings.json) 中设置 `python` 解释器路径，也可以通过环境变量覆盖：
+
+| 变量 | 用途 |
+|---|---|
+| `HUATAI_PYTHON` | Python 解释器路径，优先于配置文件 |
+| `HUATAI_PROJECTS` | 工程数据目录 |
+| `HUATAI_MODEL` | 对话模型 |
+
+模型服务密钥放在项目根目录的 `.env` 中，变量名为 `DEEPSEEK_API_KEY`。
+
+在仓库根目录执行：
 
 ```powershell
-# 1) 直接跑（已构建好）
-D:\画台\运行\画台.exe
-
-# 2) 从源码构建（Go + Wails 环境）
-cd D:\画台\shell
-wails build          # 产物 shell\build\bin\画台.exe（中文 exe 名可用）
+cd shell
+wails build
+.\build\bin\画台.exe
 ```
 
-**Python 解释器**由 [`settings.json`](settings.json) 的 `python` 字段指定（默认 `bestpic` 环境，
-必须装有 `numpy` / `Pillow` / `deepseek-harness-sdk`）；环境变量优先：
-`HUATAI_PYTHON`（解释器）、`HUATAI_PROJECTS`（工程数据根）。
+产物位于 `shell/build/bin/`。程序通过向上查找 `server/stdio.py` 定位项目根目录，因此移动 exe 时应保留可定位到源码目录的层级关系。前端资源直接嵌入，无需另跑 npm 构建。
 
-## 为什么整套在 `D:\画台`（工作区之外）
+## 服务与测试
 
-实测（不是照抄）：工作区里的 exe 是 **Low 完整性**（`S-1-16-4096`）→ WebView2 崩 `8000ffff`；
-同一个 exe 放到 `D:\画台` 就是 **High 完整性**（`S-1-16-12288`）。只有位置这一个变量，cwd 无关。
-详见 `工作文档/00-先读我.md` §一。
+桌面端会启动自己的 Python 子进程，无需预先运行 HTTP 服务。独立调试可在仓库根目录执行：
 
-> ⚠️ 因此：DSH 会话要**改**这个目录，需要 `danger-full-access`；只读权限下参谋长只能看不能写。
+```powershell
+python -m server --http --port 8612
+```
 
-## 这个仓库里**故意没有**什么（`.gitignore` 里挡着）
+离线测试入口：
 
-| 没入库 | 为什么 |
-|---|---|
-| `.env` | 里面有 `DEEPSEEK_API_KEY` 等真凭据 |
-| `projects/` | 用户的工程项目数据（原图与产物，体积会很大）；它的备份是另一件事 |
-| `.dsh_home/`、`.agent-cwd/` | 智能体运行期会话缓存（会无限增长，资产不该和运行时格式耦合） |
-| `.tmp-tests/`、`archive/` | 临时物与旧归档 |
-| `shell/build/`、`运行/`、`*.exe` | 构建产物与运行物（重新 `wails build` 即可） |
-| `__pycache__/`、`*.log`、`.venv/` | 语言/工具垃圾 |
+```powershell
+powershell -File tests/run_offline_all.ps1
+```
 
-## 读文档的顺序
+仓库中另有调用真实模型的 smoke 和 probe 脚本，运行这些脚本需要模型服务配置，并会产生 API 用量。
 
-1. [`工作文档/00-先读我.md`](工作文档/00-先读我.md) —— **接口文档**：怎么干活 / 目录 / 已验判据 / 坑 / 下一步
-2. [`工作文档/HANDOFF.md`](工作文档/HANDOFF.md) —— 交接包
-3. [`工作文档/决策记录.md`](工作文档/决策记录.md) —— 决策表（**别重开已决事项**）
-4. [`工作文档/待完善.md`](工作文档/待完善.md) —— 想到但先不做的清单
-5. 各场 `会话报告-*.md` / `阶段总结-*.md` —— 逐场记录
+## 数据与部署记录
 
-## 历史
+`projects/` 保存原图、处理结果和对话记录，需要单独备份。`.env`、模型会话缓存、日志和构建产物不纳入版本控制。
 
-- `2026-10-12` 建立于 `D:\画台`（从上个形态 `D:\玻璃画和剪纸画` 搬出，`bestpic` 冻结为参考代码）。
-- `2026-11-01` 首次上 GitHub：18 个提交，91 个跟踪文件（约 0.58 MB）。
+此前在受限开发工作区运行 exe 时出现过 WebView2 `8000ffff` 错误，移到普通开发目录后恢复。相关环境和排查过程保留在[项目说明](工作文档/00-先读我.md)中，供遇到相同问题时参考。
+
+## 开发文档
+
+- [接口、运行环境与测试说明](工作文档/00-先读我.md)
+- [交接记录](工作文档/HANDOFF.md)
+- [设计决策](工作文档/决策记录.md)
+- [后续事项](工作文档/待完善.md)
